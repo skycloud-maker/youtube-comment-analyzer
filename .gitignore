@@ -1,0 +1,44 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.pytest_tmp/
+
+# Virtual / embedded Python / build artifacts
+python312/
+build/
+dist/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Data outputs and caches
+data/raw/
+data/processed/
+data/exports/
+data/logs/
+data/dashboard_cache/
+data/mplcache/
+config/*.yaml
+!config/settings.example.yaml
+
+# Test temp folders
+pytest_temp_run_*/
+pytest-cache-files-*/
+
+# Local logs and downloads
+*.log
+get-pip.py
+python-3.12.9-embed-amd64.zip
+cloudflared.exe
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

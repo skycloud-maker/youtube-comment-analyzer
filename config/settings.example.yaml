@@ -1,0 +1,31 @@
+﻿project_name: youtube-comment-analysis
+log_level: INFO
+default_language: ko
+default_region: KR
+daily_quota_limit: 10000
+api:
+  base_url: https://www.googleapis.com/youtube/v3
+  timeout_seconds: 30
+  max_retries: 5
+  backoff_seconds: 1.5
+  max_results_per_page: 50
+storage:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  exports_dir: data/exports
+  logs_dir: data/logs
+analytics:
+  top_n_keywords: 30
+  max_representative_comments: 5
+  topic_count: 6
+  risk_keywords:
+    - 배송
+    - 불량
+    - 가격
+    - AS
+    - 소음
+    - 발열
+    - 품질
+excel:
+  datetime_format: yyyy-mm-dd hh:mm:ss
+  freeze_panes: A2
