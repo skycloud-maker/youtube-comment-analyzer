@@ -1,12 +1,21 @@
-import traceback
 import streamlit as st
+import traceback
 
-st.set_page_config(page_title="Debug Mode", layout="wide")
+st.set_page_config(page_title="Debug", layout="wide")
+
+st.write("🚀 App starting...")
 
 try:
-    from src.dashboard_app import main
-    main()
+    import src.dashboard_app as app
 
-except Exception as e:
-    st.error("❌ 앱 시작 중 에러 발생")
+    st.write("✅ import success")
+
+    try:
+        app.main()
+    except Exception:
+        st.error("❌ main() 실행 중 에러")
+        st.code(traceback.format_exc())
+
+except Exception:
+    st.error("❌ import 단계에서 에러 발생")
     st.code(traceback.format_exc())
