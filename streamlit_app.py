@@ -7,7 +7,6 @@ st.write("🚀 App starting...")
 
 try:
     import src.dashboard_app as app
-
     st.write("✅ import success")
 
     try:
