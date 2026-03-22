@@ -23,6 +23,9 @@ data/processed/
 data/exports/
 data/logs/
 data/dashboard_cache/
+!data/dashboard_cache/
+!data/dashboard_cache/dashboard_bundle.pkl
+!data/dashboard_cache/dashboard_bundle_meta.json
 data/mplcache/
 config/*.yaml
 !config/settings.example.yaml
@@ -42,3 +45,5 @@ cloudflared.exe
 Thumbs.db
 .vscode/
 .idea/
+
+

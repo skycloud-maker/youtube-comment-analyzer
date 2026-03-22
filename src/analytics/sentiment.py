@@ -1,4 +1,4 @@
-﻿"""Practical Korean/English sentiment scoring."""
+"""Practical Korean/English sentiment scoring."""
 
 from __future__ import annotations
 
@@ -9,50 +9,83 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 analyzer = SentimentIntensityAnalyzer()
 
 POSITIVE_TERMS = {
-    "좋다": 1.1,
-    "만족": 1.3,
-    "추천": 1.0,
-    "최고": 1.4,
-    "빠르": 0.8,
-    "깔끔": 0.9,
-    "예쁘": 0.8,
-    "감사": 0.6,
-    "편리": 1.1,
-    "잘샀": 1.3,
-    "튼튼": 1.1,
-    "조용": 1.1,
-    "성능좋": 1.2,
-    "가성비": 1.0,
+    "\uc88b\ub2e4": 1.1,
+    "\ub9cc\uc871": 1.3,
+    "\ucd94\ucc9c": 1.0,
+    "\ucd5c\uace0": 1.4,
+    "\ube60\ub974": 0.8,
+    "\uae54\ub054": 0.9,
+    "\uc608\uc058": 0.8,
+    "\uac10\uc0ac": 0.6,
+    "\ud3b8\ub9ac": 1.1,
+    "\uc798\uc0c0": 1.3,
+    "\ud2bc\ud2bc": 1.1,
+    "\uc870\uc6a9": 1.1,
+    "\uc131\ub2a5\uc88b": 1.2,
+    "\uac00\uc131\ube44": 1.0,
+    "\ubbff\uc74c": 0.8,
+    "worth it": 1.0,
+    "love": 1.1,
+    "great": 0.9,
 }
 NEGATIVE_TERMS = {
-    "별로": 1.0,
-    "불량": 1.6,
-    "최악": 1.7,
-    "느리": 1.0,
-    "불편": 1.3,
-    "문제": 1.1,
-    "소음": 1.2,
-    "발열": 1.1,
-    "실망": 1.5,
-    "나쁘": 1.2,
-    "고장": 1.6,
-    "하자": 1.5,
-    "비싸": 0.9,
-    "짜증": 1.4,
-    "누수": 1.5,
-    "환불": 1.2,
-    "반품": 1.2,
+    "\ubcc4\ub85c": 1.0,
+    "\ubd88\ub7c9": 1.6,
+    "\ucd5c\uc545": 1.7,
+    "\ub290\ub9ac": 1.0,
+    "\ubd88\ud3b8": 1.3,
+    "\ubb38\uc81c": 1.1,
+    "\uc18c\uc74c": 1.2,
+    "\ubc1c\uc5f4": 1.1,
+    "\uc2e4\ub9dd": 1.5,
+    "\ub098\uc058": 1.2,
+    "\uace0\uc7a5": 1.6,
+    "\ud558\uc790": 1.5,
+    "\ube44\uc2f8": 0.9,
+    "\uc9dc\uc99d": 1.4,
+    "\ub204\uc218": 1.5,
+    "\ud658\ubd88": 1.2,
+    "\ubc18\ud488": 1.2,
+    "\ubd88\ud544\uc694": 1.1,
+    "\uc4f8\ub370\uc5c6": 1.3,
+    "\ubcf5\uc7a1": 1.0,
+    "\uc6d0\ud558\uc9c0": 1.1,
+    "hate": 1.5,
+    "awful": 1.6,
+    "waste": 1.2,
+    "worthless": 1.3,
 }
-NEGATION_TERMS = {"안", "못", "않", "없", "never", "no", "not"}
-INTENSIFIERS = {"너무", "진짜", "정말", "엄청", "완전", "very", "really", "super"}
+NEGATION_TERMS = {"\uc548", "\ubabb", "\uc54a", "\uc5c6", "never", "no", "not"}
+INTENSIFIERS = {"\ub108\ubb34", "\uc9c4\uc9dc", "\uc815\ub9d0", "\uc5c4\uccad", "\uc644\uc804", "very", "really", "super"}
 ENGLISH_HINT = re.compile(r"[A-Za-z]")
-KOREAN_HINT = re.compile(r"[가-힣]")
-
+KOREAN_HINT = re.compile(r"[\uac00-\ud7a3]")
+QUESTION_COMPLAINT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"why\s+cant",
+        r"why\s+can't",
+        r"\uc65c.+\ubabb",
+        r"\uc65c.+\uc5c6",
+        r"can't they just",
+        r"\ud544\uc694\s*\uc5c6",
+        r"\uc6d0\ud558\uc9c0\s*\uc54a",
+        r"\ube7c\uace0",
+    ]
+]
+POSITIVE_OVERRIDE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\uac15\ucd94",
+        r"\uc801\uadf9 \ucd94\ucc9c",
+        r"very good",
+        r"works great",
+        r"love it",
+    ]
+]
 
 
 def _weighted_hits(text: str, lexicon: dict[str, float]) -> float:
     return sum(weight for token, weight in lexicon.items() if token in text)
-
 
 
 def score_sentiment(text: str) -> tuple[str, float]:
@@ -69,6 +102,14 @@ def score_sentiment(text: str) -> tuple[str, float]:
         negative *= 1.15 if negative else 1.0
         english_score *= 1.1
 
+    if any(pattern.search(lowered) for pattern in QUESTION_COMPLAINT_PATTERNS):
+        negative += 1.1
+        if ENGLISH_HINT.search(lowered):
+            english_score = min(english_score, -0.25)
+
+    if any(pattern.search(lowered) for pattern in POSITIVE_OVERRIDE_PATTERNS):
+        positive += 1.0
+
     for token, weight in POSITIVE_TERMS.items():
         if token in lowered and any(neg + token in lowered or f"{neg} {token}" in lowered for neg in NEGATION_TERMS):
             positive -= weight
@@ -81,12 +122,12 @@ def score_sentiment(text: str) -> tuple[str, float]:
     if KOREAN_HINT.search(lowered):
         lexicon_total = positive + negative
         lexicon_score = (positive - negative) / lexicon_total if lexicon_total else 0.0
-        final_score = round((lexicon_score * 0.75) + (english_score * 0.25), 3) if ENGLISH_HINT.search(lowered) else round(lexicon_score, 3)
+        final_score = round((lexicon_score * 0.8) + (english_score * 0.2), 3) if ENGLISH_HINT.search(lowered) else round(lexicon_score, 3)
     else:
-        final_score = round(english_score, 3)
+        final_score = round(((positive - negative) / (positive + negative)) if (positive + negative) else english_score, 3)
 
-    if final_score >= 0.35:
+    if final_score >= 0.32:
         return "positive", final_score
-    if final_score <= -0.35:
+    if final_score <= -0.22:
         return "negative", final_score
     return "neutral", final_score

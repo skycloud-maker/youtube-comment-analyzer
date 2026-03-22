@@ -1,37 +1,29 @@
-﻿"""Text cleaning helpers for Korean-friendly preprocessing."""
+"""Text cleaning helpers for preprocessing and validity filtering."""
 
 from __future__ import annotations
 
 import html
 import re
 
-URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
+URL_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 MULTISPACE_PATTERN = re.compile(r"\s+")
 REPEATED_CHAR_PATTERN = re.compile(r"(.)\1{3,}")
 REPEATED_TOKEN_PATTERN = re.compile(r"\b(\w{2,})\b(?:\s+\1\b){2,}", re.IGNORECASE)
-NON_TEXT_PATTERN = re.compile(r"[^\w\sㄱ-ㅎ가-힣ㅠㅜ]+")
-BOILERPLATE_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"^first!?$",
-        r"^1등!?$",
-        r"구독\s*좋아요",
-        r"알림\s*설정",
-        r"카톡",
-        r"오픈채팅",
-        r"비트코인",
-        r"재테크",
-    ]
-]
-LOW_SIGNAL_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"^(좋아요|잘보고갑니다|감사합니다|최고예요|최고입니다|굿|good|great)[!~. ]*$",
-        r"^(맞아요|인정|공감)[!~. ]*$",
-        r"^(정말|진짜|너무|완전)?\s*(좋아요|최고예요|최고입니다|감사합니다)[!~. ]*$",
-    ]
-]
+LATIN_WORD_PATTERN = re.compile(r"[A-Za-z]")
+HANGUL_PATTERN = re.compile(r"[\uac00-\ud7a3]")
+ONLY_PUNCT_PATTERN = re.compile(r"^[\W_]+$")
 
+_GENERIC_WORDS = {
+    "first", "nice", "great", "good", "lol", "wow", "omg", "thanks", "thank you",
+    "cool", "awesome", "amazing", "best", "love it"
+}
+_GENERIC_KO = {
+    "\uc88b\uc544\uc694", "\ucd5c\uace0", "\uac10\uc0ac", "\uac10\uc0ac\ud569\ub2c8\ub2e4", "\uc640", "\ub300\ubc15", "\uad7f", "\u314b\u314b", "\u314e\u314e", "\uc624"
+}
+_AD_MARKERS = {
+    "promo code", "discount link", "dm me", "telegram", "whatsapp", "http://", "https://", "www.",
+}
+_MEANINGLESS_MARKERS = {"lol", "\u314b\u314b", "\u314e\u314e", "wow", "omg"}
 
 
 def clean_text(text: str, *, remove_urls: bool = True, preserve_emoji: bool = True, normalize_repeats: bool = True) -> str:
@@ -41,40 +33,55 @@ def clean_text(text: str, *, remove_urls: bool = True, preserve_emoji: bool = Tr
         value = URL_PATTERN.sub(" ", value)
     if normalize_repeats:
         value = REPEATED_CHAR_PATTERN.sub(lambda match: match.group(1) * 2, value)
-    value = REPEATED_TOKEN_PATTERN.sub(lambda match: match.group(1), value)
-    value = MULTISPACE_PATTERN.sub(" ", value).strip()
-    for pattern in BOILERPLATE_PATTERNS:
-        if pattern.search(value):
-            return ""
+        value = REPEATED_TOKEN_PATTERN.sub(lambda match: match.group(1), value)
     if not preserve_emoji:
-        value = re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", value)
-        value = MULTISPACE_PATTERN.sub(" ", value).strip()
+        value = re.sub(r"[^\w\s\uac00-\ud7a3]", " ", value)
+    value = MULTISPACE_PATTERN.sub(" ", value).strip()
     return value
 
 
+def _normalize_for_rules(text: str) -> str:
+    lowered = clean_text(text or "", preserve_emoji=True).lower().strip()
+    return MULTISPACE_PATTERN.sub(" ", lowered)
+
 
 def classify_comment_quality(text: str) -> str:
-    value = clean_text(text, preserve_emoji=True)
-    if not value:
-        return "spam"
-    condensed = NON_TEXT_PATTERN.sub("", value)
-    if not condensed:
-        return "noise"
-    if len(condensed) <= 2:
-        return "noise"
-    if any(pattern.search(value) for pattern in LOW_SIGNAL_PATTERNS):
-        return "low_signal"
-    if len(value.split()) == 1 and len(condensed) <= 4:
-        return "low_signal"
-    if sum(1 for char in value if char in "!?~ㅋㅎㅠㅜ") >= max(len(value) // 2, 3):
-        return "noise"
-    return "meaningful"
+    raw = html.unescape(text or "").strip()
+    normalized = _normalize_for_rules(raw)
+    if not normalized:
+        return "meaningless"
 
+    if any(marker in normalized for marker in _AD_MARKERS):
+        return "ad"
+    tokens = raw.split()
+    if tokens and len(tokens) <= 3 and all(token.startswith("@") for token in tokens):
+        return "tagging_only"
+    if ONLY_PUNCT_PATTERN.fullmatch(raw):
+        return "meaningless"
+    if REPEATED_TOKEN_PATTERN.search(raw):
+        return "repetitive"
+
+    stripped = re.sub(r"[^\w\uac00-\ud7a3]", "", normalized)
+    if len(stripped) <= 1:
+        return "meaningless"
+
+    normalized_no_punct = re.sub(r"[^\w\s\uac00-\ud7a3]", "", normalized).strip()
+    if normalized_no_punct in _GENERIC_WORDS or normalized_no_punct in _GENERIC_KO:
+        return "generic_engagement"
+    if normalized_no_punct in _MEANINGLESS_MARKERS:
+        return "meaningless"
+
+    word_count = len(normalized.split())
+    if word_count == 1 and len(stripped) <= 4:
+        return "low_context"
+
+    return "valid"
 
 
 def detect_language_hint(text: str) -> str:
-    if re.search(r"[가-힣]", text):
+    value = text or ""
+    if HANGUL_PATTERN.search(value):
         return "ko"
-    if re.search(r"[A-Za-z]", text):
+    if LATIN_WORD_PATTERN.search(value):
         return "en"
     return "unknown"

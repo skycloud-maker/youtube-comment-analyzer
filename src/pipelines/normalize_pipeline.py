@@ -1,4 +1,4 @@
-﻿"""Normalization pipeline for flat tables and derived columns."""
+"""Normalization pipeline for flat tables and derived columns."""
 
 from __future__ import annotations
 
@@ -28,8 +28,10 @@ class NormalizePipeline:
             normalized_comments["text_length"] = normalized_comments["cleaned_text"].map(len)
             normalized_comments["language_detected"] = normalized_comments["cleaned_text"].map(detect_language_hint)
             normalized_comments["comment_quality"] = normalized_comments["text_original"].map(classify_comment_quality)
-            normalized_comments["analysis_included"] = normalized_comments["comment_quality"].eq("meaningful") & normalized_comments["cleaned_text"].ne("")
-            normalized_comments["removed_reason"] = normalized_comments["comment_quality"].where(~normalized_comments["analysis_included"], "")
+            normalized_comments["comment_validity"] = normalized_comments["comment_quality"].map(lambda value: "valid" if value == "valid" else "excluded")
+            normalized_comments["exclusion_reason"] = normalized_comments["comment_quality"].where(normalized_comments["comment_validity"] == "excluded", pd.NA)
+            normalized_comments["analysis_included"] = normalized_comments["comment_validity"].eq("valid") & normalized_comments["cleaned_text"].ne("")
+            normalized_comments["removed_reason"] = normalized_comments["exclusion_reason"].fillna("")
             normalized_comments = normalized_comments.drop_duplicates(subset=["video_id", "comment_id"], keep="last").reset_index(drop=True)
 
         run_dir = ensure_dir(self.processed_dir / run_id)

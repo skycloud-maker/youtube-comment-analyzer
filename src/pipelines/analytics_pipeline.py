@@ -1,4 +1,4 @@
-﻿"""Analytics pipeline for descriptive and NLP outputs."""
+"""Analytics pipeline for descriptive and NLP outputs."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.analytics.brands import infer_brand
+from src.analytics.comment_analysis import analyze_comment_with_context
 from src.analytics.clustering import assign_clusters
 from src.analytics.descriptive import build_descriptive_metrics
 from src.analytics.keywords import extract_keywords
@@ -29,10 +30,37 @@ class AnalyticsPipeline:
 
     def run(self, run_id: str, videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         working_comments = self._attach_video_context(comments_df, videos_df)
+        for column in ["product", "region", "title", "video_url"]:
+            if column not in working_comments.columns:
+                working_comments[column] = pd.NA
         analysis_comments = working_comments[working_comments.get("analysis_included", False) == True].copy() if not working_comments.empty else working_comments.copy()
         if not analysis_comments.empty:
-            sentiment = analysis_comments["cleaned_text"].map(score_sentiment)
-            analysis_comments[["sentiment_label", "sentiment_score"]] = pd.DataFrame(sentiment.tolist(), index=analysis_comments.index)
+            parent_lookup = analysis_comments.set_index("comment_id")["text_display"].to_dict() if "comment_id" in analysis_comments.columns and "text_display" in analysis_comments.columns else {}
+            analysis_comments["parent_comment_text"] = analysis_comments.get("parent_comment_id", pd.Series(index=analysis_comments.index, dtype=object)).map(lambda value: parent_lookup.get(value, "") if pd.notna(value) else "")
+            analysis_results = analysis_comments.apply(
+                lambda row: analyze_comment_with_context(
+                    row.get("cleaned_text", ""),
+                    validity=row.get("comment_validity", "valid"),
+                    exclusion_reason=row.get("exclusion_reason"),
+                    parent_comment=row.get("parent_comment_text", ""),
+                    context_comments=["" if pd.isna(row.get("title", pd.NA)) else str(row.get("title", "")), "" if pd.isna(row.get("product", pd.NA)) else str(row.get("product", ""))],
+                    is_reply=bool(row.get("is_reply", False)),
+                ),
+                axis=1,
+            )
+            analysis_comments["product_related"] = analysis_results.map(lambda item: item.product_related)
+            analysis_comments["product_target"] = analysis_results.map(lambda item: item.product_target)
+            analysis_comments["sentiment_label"] = analysis_results.map(lambda item: item.sentiment_label)
+            analysis_comments["sentiment_score"] = analysis_results.map(lambda item: item.sentiment_score)
+            analysis_comments["signal_strength"] = analysis_results.map(lambda item: item.signal_strength)
+            analysis_comments["classification_type"] = analysis_results.map(lambda item: item.classification_type)
+            analysis_comments["confidence_level"] = analysis_results.map(lambda item: item.confidence_level)
+            analysis_comments["context_used"] = analysis_results.map(lambda item: item.context_used)
+            analysis_comments["context_required_for_display"] = analysis_results.map(lambda item: item.context_required_for_display)
+            analysis_comments["classification_reason"] = analysis_results.map(lambda item: item.reason)
+            analysis_comments["needs_review"] = analysis_results.map(lambda item: item.needs_review)
+            representative_meta = analysis_comments.apply(self._representative_metadata, axis=1, result_type="expand")
+            analysis_comments = pd.concat([analysis_comments, representative_meta], axis=1)
             analysis_comments["topic_label"] = analysis_comments["cleaned_text"].map(infer_topic)
             title_series = analysis_comments["title"].fillna("") if "title" in analysis_comments.columns else pd.Series("", index=analysis_comments.index)
             analysis_comments["brand_label"] = (analysis_comments["cleaned_text"].fillna("") + " " + title_series).map(infer_brand)
@@ -40,13 +68,15 @@ class AnalyticsPipeline:
             analysis_comments["spam_like"] = analysis_comments.duplicated(subset=["video_id", "cleaned_text"], keep=False)
             analysis_comments["risk_flags"] = analysis_comments["cleaned_text"].map(self._flag_risks)
             working_comments = working_comments.merge(
-                analysis_comments[["comment_id", "sentiment_label", "sentiment_score", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags"]],
+                analysis_comments[["comment_id", "product_related", "product_target", "sentiment_label", "sentiment_score", "signal_strength", "classification_type", "confidence_level", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags", "context_used", "context_required_for_display", "classification_reason", "needs_review", "parent_comment_text", "representative_score", "clarity_score", "product_specificity_score", "insight_value_score", "representativeness_score", "explainability_score", "context_independence_score", "representative_decision", "representative_reason"]],
                 on="comment_id",
                 how="left",
             )
         else:
-            for column in ["sentiment_label", "sentiment_score", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags"]:
+            for column in ["product_related", "product_target", "sentiment_label", "sentiment_score", "signal_strength", "classification_type", "confidence_level", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags", "context_used", "context_required_for_display", "classification_reason", "needs_review", "parent_comment_text", "representative_score", "clarity_score", "product_specificity_score", "insight_value_score", "representativeness_score", "explainability_score", "context_independence_score", "representative_decision", "representative_reason"]:
                 working_comments[column] = pd.NA
+
+        working_comments["sentiment_label"] = working_comments["sentiment_label"].where(working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"), pd.NA)
 
         metrics = build_descriptive_metrics(videos_df, working_comments)
         keyword_df = extract_keywords(analysis_comments["cleaned_text"] if not analysis_comments.empty else pd.Series(dtype=str), self.top_n_keywords)
@@ -107,14 +137,79 @@ class AnalyticsPipeline:
         return comments_df.groupby(column).size().reset_index(name="count").sort_values("count", ascending=False)
 
     @staticmethod
+    def _representative_metadata(row: pd.Series) -> pd.Series:
+        text = str(row.get("text_display", "") or row.get("cleaned_text", "") or "")
+        product_related = bool(row.get("product_related", False))
+        sentiment = str(row.get("sentiment_label", "") or "")
+        classification_type = str(row.get("classification_type", "informational") or "informational")
+        confidence = str(row.get("confidence_level", "low") or "low")
+        context_required = bool(row.get("context_required_for_display", False))
+        needs_review = bool(row.get("needs_review", False))
+        target = str(row.get("product_target", "") or "")
+
+        text_len = len(text.strip())
+        clarity = 5 if 25 <= text_len <= 220 else 4 if 12 <= text_len <= 280 else 2
+        product_specificity = 5 if target else 4 if product_related else 2
+        if sentiment in {"positive", "negative"} and classification_type == "complaint":
+            insight_value = 5
+        elif classification_type in {"comparison", "preference"}:
+            insight_value = 3
+        elif product_related:
+            insight_value = 3
+        else:
+            insight_value = 1
+        representativeness = 5 if confidence == "high" and not needs_review else 4 if confidence == "medium" else 2
+        explainability = 5 if not context_required and confidence == "high" else 4 if not context_required else 2
+        context_independence = 5 if not context_required else 2
+        total = int(clarity + product_specificity + insight_value + representativeness + explainability + context_independence)
+
+        if sentiment in {"positive", "negative"} and total >= 24 and not context_required and classification_type != "informational":
+            decision = "strong_candidate"
+        elif total >= 18 and product_related:
+            decision = "review_needed"
+        else:
+            decision = "not_suitable"
+
+        if decision == "strong_candidate":
+            reason = "\uc758\ubbf8\uac00 \uba85\ud655\ud558\uace0 \uc81c\ud488 \uad00\ub828\uc131\uc774 \ub192\uc544, \uc758\uc0ac\uacb0\uc815\uc790\uc5d0\uac8c \ubc14\ub85c \ubcf4\uc5ec\uc918\ub3c4 \uc65c \uc911\uc694\ud55c\uc9c0 \uc774\ud574\ud558\uae30 \uc26c\uc6b4 \ub313\uae00\uc785\ub2c8\ub2e4."
+        elif decision == "review_needed":
+            reason = "\uc758\ubbf8\ub294 \uc788\uc9c0\ub9cc \ub9e5\ub77d \uc758\uc874\uc131\uc774\ub098 \ud574\uc11d \ubcf4\uac15\uc774 \uc870\uae08 \ub354 \ud544\uc694\ud55c \ub313\uae00\uc774\ub77c, \ub300\ud45c \ucf54\uba58\ud2b8\ub85c \uc4f0\uae30 \uc804\uc5d0 \uac80\ud1a0\uac00 \ud544\uc694\ud569\ub2c8\ub2e4."
+        else:
+            reason = "\ub9e5\ub77d \uc758\uc874\uc131\uc774 \ub192\uac70\ub098 \uc778\uc0ac\uc774\ud2b8\uac00 \uc57d\ud574, \ub300\ud45c \ucf54\uba58\ud2b8\ub85c \ubc14\ub85c \uc81c\uc2dc\ud558\uae30\uc5d0\ub294 \uc124\uba85\ub825\uc774 \ubd80\uc871\ud55c \ub313\uae00\uc785\ub2c8\ub2e4."
+
+        return pd.Series({
+            "representative_score": total,
+            "clarity_score": clarity,
+            "product_specificity_score": product_specificity,
+            "insight_value_score": insight_value,
+            "representativeness_score": representativeness,
+            "explainability_score": explainability,
+            "context_independence_score": context_independence,
+            "representative_decision": decision,
+            "representative_reason": reason,
+        })
+
+    @staticmethod
     def _representative_comments(comments_df: pd.DataFrame) -> pd.DataFrame:
         if comments_df.empty:
             return pd.DataFrame()
+        working = comments_df.copy()
+        if "representative_decision" in working.columns:
+            working = working[working["representative_decision"].isin(["strong_candidate", "review_needed"])].copy()
         frames = []
+        decision_rank = {"strong_candidate": 0, "review_needed": 1, "not_suitable": 2}
         for label in ["positive", "negative", "neutral"]:
-            subset = comments_df[comments_df["sentiment_label"] == label].sort_values(["sentiment_score", "like_count"], ascending=[label != "negative", False]).head(6)
-            if not subset.empty:
-                frames.append(subset)
+            subset = working[working["sentiment_label"] == label].copy()
+            if subset.empty:
+                continue
+            if "representative_decision" in subset.columns:
+                subset["_decision_rank"] = subset["representative_decision"].map(decision_rank).fillna(9)
+            else:
+                subset["_decision_rank"] = 9
+            if "representative_score" not in subset.columns:
+                subset["representative_score"] = 0
+            subset = subset.sort_values(["_decision_rank", "representative_score", "like_count", "sentiment_score"], ascending=[True, False, False, label != "negative"]).head(8)
+            frames.append(subset.drop(columns=["_decision_rank"], errors="ignore"))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     @staticmethod
@@ -122,7 +217,7 @@ class AnalyticsPipeline:
         columns = ["product", "region", "brand_label", "count", "ratio"]
         if comments_df.empty or "brand_label" not in comments_df.columns:
             return pd.DataFrame(columns=columns)
-        working = comments_df[comments_df["brand_label"] != "미언급"].copy()
+        working = comments_df[comments_df["brand_label"].fillna("").astype(str).ne("")].copy()
         if working.empty:
             return pd.DataFrame(columns=columns)
         grouped = working.groupby(["product", "region", "brand_label"], dropna=False).size().reset_index(name="count")
@@ -148,10 +243,13 @@ class AnalyticsPipeline:
         if videos_df.empty:
             return pd.DataFrame(columns=columns)
         working = videos_df.copy()
+        for column in ["product", "region", "title", "video_url"]:
+            if column not in working.columns:
+                working[column] = pd.NA
         if comments_df.empty:
             for column in ["negative_comments", "total_comments", "negative_density"]:
                 working[column] = 0
-            return working[columns] if set(columns).issubset(working.columns) else pd.DataFrame(columns=columns)
+            return working[columns].sort_values(["negative_density", "negative_comments"], ascending=False).reset_index(drop=True)
         negative_counts = comments_df.groupby("video_id")["sentiment_label"].apply(lambda series: int((series == "negative").sum())).rename("negative_comments")
         total_counts = comments_df.groupby("video_id").size().rename("total_comments")
         working = working.merge(negative_counts, on="video_id", how="left").merge(total_counts, on="video_id", how="left")

@@ -1,4 +1,4 @@
-﻿"""Descriptive analytics helpers."""
+"""Descriptive analytics helpers."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import pandas as pd
 
 def build_descriptive_metrics(videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     replies_df = comments_df[comments_df["is_reply"] == True].copy() if not comments_df.empty else comments_df.copy()
-    removed_count = int((comments_df.get("analysis_included", pd.Series(dtype=bool)) == False).sum()) if not comments_df.empty and "analysis_included" in comments_df else 0
-    valid_count = int((comments_df.get("analysis_included", pd.Series(dtype=bool)) == True).sum()) if not comments_df.empty and "analysis_included" in comments_df else int(len(comments_df))
+    removed_count = int((comments_df.get("comment_validity", pd.Series(dtype=object)) == "excluded").sum()) if not comments_df.empty and "comment_validity" in comments_df else 0
+    valid_count = int((comments_df.get("comment_validity", pd.Series(dtype=object)) == "valid").sum()) if not comments_df.empty and "comment_validity" in comments_df else int(len(comments_df))
     summary = pd.DataFrame(
         [
             {"metric": "total_videos", "value": int(len(videos_df))},
@@ -52,8 +52,10 @@ def build_descriptive_metrics(videos_df: pd.DataFrame, comments_df: pd.DataFrame
         comment_time_trend = comment_time_trend.groupby("comment_date").size().reset_index(name="comment_count")
 
     quality_summary = pd.DataFrame()
-    if not comments_df.empty and "comment_quality" in comments_df.columns:
-        quality_summary = comments_df.groupby("comment_quality").size().reset_index(name="count").sort_values("count", ascending=False)
+    if not comments_df.empty and "comment_validity" in comments_df.columns:
+        reason_series = comments_df["exclusion_reason"] if "exclusion_reason" in comments_df.columns else pd.Series(pd.NA, index=comments_df.index)
+        quality_base = comments_df.assign(exclusion_reason=reason_series)
+        quality_summary = quality_base.groupby(["comment_validity", "exclusion_reason"], dropna=False).size().reset_index(name="count").sort_values(["comment_validity", "count"], ascending=[True, False])
 
     return {
         "runs_summary": summary,
