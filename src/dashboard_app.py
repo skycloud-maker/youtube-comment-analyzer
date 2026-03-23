@@ -1364,7 +1364,7 @@ def load_dashboard_data_lite_comments() -> dict[str, pd.DataFrame]:
     comments_df = data.get("comments", pd.DataFrame())
     if not comments_df.empty:
         # ✅ Lite에서는 너무 많이 잡지 않게 상한(필요시 3000~10000 조절)
-        comments_df = comments_df.head(5000).copy()
+        comments_df = comments_df.head(1000).copy()
     data["comments"] = comments_df
 
     return data
