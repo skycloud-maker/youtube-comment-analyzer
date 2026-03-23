@@ -89,17 +89,21 @@ COL_SENTIMENT_CODE = "sentiment_code"
 #        if meta.get("signature") == latest_signature:
 #            return pd.read_pickle(CACHE_FILE)
 #회사에서 공유용으로 수정
-@st.cache_data(show_spinner=False)
+#삭제 @st.cache_data(show_spinner=False)
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
-    # ✅ 1) 캐시가 있으면 “일단 즉시” 보여주기 (health-check 안정화 핵심)
+    @st.cache_resource
+    def get_dashboard_data_resource():
+        return load_dashboard_data()
+        
+    
+    # ✅ 캐시가 있으면 일단 즉시 사용 (초기 로딩/health-check 안정화)
     if CACHE_FILE.exists():
         try:
             return pd.read_pickle(CACHE_FILE)
         except Exception:
-            # 캐시가 깨졌으면 아래 로직으로 재생성
-            pass
+            pass  # 캐시가 깨졌으면 아래에서 재생성
 
-    # ✅ 2) 캐시가 없을 때만 서명 계산(무거운 작업)
+    # ✅ 캐시가 없을 때만 무거운 시그니처 계산
     latest_signature = _latest_signature()
 
     if CACHE_FILE.exists() and CACHE_META.exists():
@@ -109,6 +113,7 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
                 return pd.read_pickle(CACHE_FILE)
         except Exception:
             pass
+
 
     #
 
@@ -135,7 +140,7 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
     )
 
     #회사 공유용으로 추가
-    run_dirs = run_dirs[:5]   # ✅ 최근 5개만 읽기 (원하면 3~10으로 조절)
+    run_dirs = run_dirs[:3]   # ✅ 최근 5개만 읽기 (원하면 3~10으로 조절)
 
     #
     
@@ -416,7 +421,7 @@ def _latest_signature() -> float:
         for path in PROCESSED_DIR.rglob("*.parquet"):
             mt = max(mt, path.stat().st_mtime)
             count += 1
-            if count >= 300:   # ✅ 상한(원하면 200~500 사이로)
+            if count >= 200:   # ✅ 상한(원하면 200~500 사이로)
                 break
     except Exception:
         pass
@@ -1262,7 +1267,25 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
-    data = load_dashboard_data()
+
+    # 회사 부팅 최적화
+    
+    # ✅ 1) 첫 실행은 가볍게 통과(health-check 안정화)
+    if "booted_once" not in st.session_state:
+        st.session_state["booted_once"] = True
+        st.title("가전 VoC Dashboard")
+        st.caption("초기화 중입니다… (첫 로딩 안정화)")
+        st.info("잠시 후 자동으로 데이터 로딩을 시작합니다.")
+        st.experimental_rerun()   # ✅ 여기서 바로 재실행
+
+    #
+
+    
+    # 기존코드 data = load_dashboard_data()
+    #회사 부팅 최적화용 추가
+    with st.spinner("데이터 로딩 중…"):
+    data = get_dashboard_data_resource()
+    #
     comments_df = add_localized_columns(data["comments"])
     if comments_df.empty:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
