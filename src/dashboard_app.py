@@ -1353,79 +1353,26 @@ def render_comments_lite(comments_df: pd.DataFrame) -> None:
     st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
     st.dataframe(view_df.iloc[start:end][show_cols] if show_cols else view_df.iloc[start:end],
                  use_container_width=True, hide_index=True)
-
 def load_dashboard_data_lite_comments() -> dict[str, pd.DataFrame]:
-    """Lite(댓글 포함): 최근 실행 1개만 + 댓글 컬럼 최소 로딩으로 피크를 낮춤"""
-    # ✅ 별도 캐시 파일을 쓰면 더 안정적이지만, 일단 간단히 리소스 캐시로만 묶습니다.
-    run_dirs = sorted(
-        (path for path in PROCESSED_DIR.iterdir() if path.is_dir()) if PROCESSED_DIR.exists() else [],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    run_dirs = run_dirs[:1]  # ✅ Lite는 최신 1회만
+    """
+    Lite(댓글 포함):
+    - 기존 load_dashboard_data()를 그대로 재사용 (파일명/컬럼명 불일치로 비는 문제 방지)
+    - 댓글은 표시하되, 너무 큰 경우 상위 N건만 잡아서 렌더/메모리 피크를 낮춤
+    """
+    data = load_dashboard_data()  # ✅ 이미 검증된 full 로더 재사용
 
-    # Lite에서 필요한 댓글 컬럼(없으면 자동 무시됨)
-    wanted_cols = [
-        "comment_id", "parent_comment_id",
-        "text_display", "text_original",
-        "language_detected",
-        "like_count",
-        "title", "video_url",
-        "published_at",
-        "sentiment_label",
-        "topic_label",
-        "brand_label",
-        "product",
-        "region",
-        "cleaned_text",
-        "comment_validity",
-        "removed_reason",
-        "exclusion_reason",
-    ]
+    comments_df = data.get("comments", pd.DataFrame())
+    if not comments_df.empty:
+        # ✅ Lite에서는 너무 많이 잡지 않게 상한(필요시 3000~10000 조절)
+        comments_df = comments_df.head(5000).copy()
+    data["comments"] = comments_df
 
-    def _read_frame_cols(path: Path, columns: list[str]) -> pd.DataFrame:
-        if path.exists():
-            try:
-                # parquet이면 columns 옵션 사용(메모리 절약)
-                if path.suffix.lower() == ".parquet":
-                    return pd.read_parquet(path, columns=columns)
-                return pd.read_parquet(path)
-            except Exception:
-                try:
-                    return pd.read_parquet(path)
-                except Exception:
-                    pass
-        csv_path = path.with_suffix(".csv")
-        if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            keep = [c for c in columns if c in df.columns]
-            return df[keep] if keep else df
-        return pd.DataFrame()
-
-    comments_frames = []
-    videos_frames = []
-
-    for run_dir in run_dirs:
-        # 댓글(필수)
-        comments_frames.append(_read_frame_cols(run_dir / "comments.parquet", wanted_cols))
-        # 영상(선택: 링크 표시용)
-        videos_frames.append(_read_frame_cols(run_dir / "videos_normalized.parquet", []))
-
-    comments_df = pd.concat([f for f in comments_frames if not f.empty], ignore_index=True) if any(not f.empty for f in comments_frames) else pd.DataFrame()
-    videos_df = pd.concat([f for f in videos_frames if not f.empty], ignore_index=True) if any(not f.empty for f in videos_frames) else pd.DataFrame()
-
-    return {"comments": comments_df, "videos": videos_df}
+    return data
 
 
 @st.cache_resource
 def get_dashboard_data_resource_lite_comments():
     return load_dashboard_data_lite_comments()
-
-
-
-
-
-
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
