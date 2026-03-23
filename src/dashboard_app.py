@@ -82,12 +82,36 @@ COL_SENTIMENT_CODE = "sentiment_code"
 
 
 @st.cache_data(show_spinner=False)
+#def load_dashboard_data() -> dict[str, pd.DataFrame]:
+#    latest_signature = _latest_signature()
+#    if CACHE_FILE.exists() and CACHE_META.exists():
+#        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+#        if meta.get("signature") == latest_signature:
+#            return pd.read_pickle(CACHE_FILE)
+#회사에서 공유용으로 수정
+@st.cache_data(show_spinner=False)
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
-    latest_signature = _latest_signature()
-    if CACHE_FILE.exists() and CACHE_META.exists():
-        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
-        if meta.get("signature") == latest_signature:
+    # ✅ 1) 캐시가 있으면 “일단 즉시” 보여주기 (health-check 안정화 핵심)
+    if CACHE_FILE.exists():
+        try:
             return pd.read_pickle(CACHE_FILE)
+        except Exception:
+            # 캐시가 깨졌으면 아래 로직으로 재생성
+            pass
+
+    # ✅ 2) 캐시가 없을 때만 서명 계산(무거운 작업)
+    latest_signature = _latest_signature()
+
+    if CACHE_FILE.exists() and CACHE_META.exists():
+        try:
+            meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+            if meta.get("signature") == latest_signature:
+                return pd.read_pickle(CACHE_FILE)
+        except Exception:
+            pass
+
+    #
+
 
     if CACHE_FILE.exists() and (not PROCESSED_DIR.exists() or not any(PROCESSED_DIR.iterdir())):
         return pd.read_pickle(CACHE_FILE)
@@ -109,6 +133,12 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+
+    #회사 공유용으로 추가
+    run_dirs = run_dirs[:5]   # ✅ 최근 5개만 읽기 (원하면 3~10으로 조절)
+
+    #
+    
     for run_dir in run_dirs:
         manifest_path = run_dir / "run_manifest.json"
         if not manifest_path.exists():
@@ -369,12 +399,30 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     return working
 
 
+#def _latest_signature() -> float:
+#    if not PROCESSED_DIR.exists():
+#        return 0.0
+#    mtimes = [path.stat().st_mtime for path in PROCESSED_DIR.rglob("*.parquet")]
+#    return max(mtimes) if mtimes else 0.0
+#회사에서 공유용으로 수정
 def _latest_signature() -> float:
     if not PROCESSED_DIR.exists():
         return 0.0
-    mtimes = [path.stat().st_mtime for path in PROCESSED_DIR.rglob("*.parquet")]
-    return max(mtimes) if mtimes else 0.0
 
+    # ✅ 너무 많은 파일을 다 훑지 않도록 상한을 둬서 startup을 안정화
+    mt = 0.0
+    count = 0
+    try:
+        for path in PROCESSED_DIR.rglob("*.parquet"):
+            mt = max(mt, path.stat().st_mtime)
+            count += 1
+            if count >= 300:   # ✅ 상한(원하면 200~500 사이로)
+                break
+    except Exception:
+        pass
+    return mt
+
+#
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
