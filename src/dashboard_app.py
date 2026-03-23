@@ -1430,62 +1430,50 @@ def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
 
-    # 회사 부팅 최적화
-    
-    # ✅ 1) 첫 실행은 가볍게 통과(health-check 안정화)
-    if "booted_once" not in st.session_state:
-        st.session_state["booted_once"] = True
-        st.title("가전 VoC Dashboard")
-        st.caption("초기화 중입니다… (첫 로딩 안정화)")
-        st.info("잠시 후 자동으로 데이터 로딩을 시작합니다.")
-        st.rerun()   # ✅ 여기서 바로 재실행
-
-    #
-
     
     # 기존코드 data = load_dashboard_data()
     #회사 부팅 최적화용 추가
     mode = get_mode()  # ✅ 먼저 모드 결정 (?mode=lite / ?mode=full)
 
-with st.spinner("데이터 로딩 중…"):
-    # ✅ Lite면 Lite용 경량 로더(댓글 포함)로 로딩
+    with st.spinner("데이터 로딩 중…"):
+        # ✅ Lite면 Lite용 경량 로더(댓글 포함)로 로딩
+        if mode == "lite":
+            data = get_dashboard_data_resource_lite_comments()
+        else:
+            data = get_dashboard_data_resource()
+
+    comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
+    if comments_df.empty:
+        st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
+        return
+
+    # =====================================================
+    # ✅ Lite / Full 분기 (기존 full은 그대로 유지)
+    # =====================================================
     if mode == "lite":
-        data = get_dashboard_data_resource_lite_comments()
-    else:
-        data = get_dashboard_data_resource()
+        st.markdown("## 가전 VoC Dashboard (Lite)")
+        st.caption("댓글은 포함하되, 샘플/페이지네이션 방식으로 빠르게 표시합니다.")
+        render_comments_lite(comments_df)
 
-comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
-if comments_df.empty:
-    st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
-    return
+        st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
+        st.markdown("- 전체 모드: `?mode=full`")
+        st.markdown("- Lite 모드: `?mode=lite`")
+        return
 
-# =====================================================
-# ✅ Lite / Full 분기 (기존 full은 그대로 유지)
-# =====================================================
-if mode == "lite":
-    st.markdown("## 가전 VoC Dashboard (Lite)")
-    st.caption("댓글은 포함하되, 샘플/페이지네이션 방식으로 빠르게 표시합니다.")
-    render_comments_lite(comments_df)
+    # =====================================================
+    # ✅ 여기부터는 기존 Full 모드 (당신 기존 코드 그대로)
+    # =====================================================
 
-    st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
-    st.markdown("- 전체 모드: `?mode=full`")
-    st.markdown("- Lite 모드: `?mode=lite`")
-    return
+    videos_df = data["videos"].copy()
+    videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
+    products = [value for value in PRODUCT_ORDER if value in comments_df["product"].astype(str).unique().tolist()]
+    regions = [value for value in [localize_region("KR"), localize_region("US")] if value in comments_df[COL_COUNTRY].astype(str).unique().tolist()]
+    sentiments = [value for value in [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")] if value in comments_df[COL_SENTIMENT].astype(str).unique().tolist()]
+    cej_labels = [value for value in CEJ_ORDER if value in comments_df[COL_CEJ].astype(str).unique().tolist()]
 
-# =====================================================
-# ✅ 여기부터는 기존 Full 모드 (당신 기존 코드 그대로)
-# =====================================================
-
-videos_df = data["videos"].copy()
-videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
-products = [value for value in PRODUCT_ORDER if value in comments_df["product"].astype(str).unique().tolist()]
-regions = [value for value in [localize_region("KR"), localize_region("US")] if value in comments_df[COL_COUNTRY].astype(str).unique().tolist()]
-sentiments = [value for value in [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")] if value in comments_df[COL_SENTIMENT].astype(str).unique().tolist()]
-cej_labels = [value for value in CEJ_ORDER if value in comments_df[COL_CEJ].astype(str).unique().tolist()]
-
-st.markdown("## 가전 VoC Dashboard")
-st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
-st.caption("Build: 2026-03-22 23:25 / representative-header-render-fix-2")
+    st.markdown("## 가전 VoC Dashboard")
+    st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
+    st.caption("Build: 2026-03-22 23:25 / representative-header-render-fix-2")
 
 
     with st.sidebar:
