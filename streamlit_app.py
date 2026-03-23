@@ -1,5 +1,4 @@
-import streamlit as st
+﻿from src.dashboard_app import main
 
-st.set_page_config(page_title="Smoke Test", layout="wide")
-st.title("Streamlit basic app is running")
-st.success("If you can see this, deployment plumbing is OK.")
+if __name__ == "__main__":
+    main()
