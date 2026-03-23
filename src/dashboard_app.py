@@ -22,6 +22,25 @@ from src.analytics.keywords import build_keyword_counter, filter_business_keywor
 from src.utils.translation import translate_to_korean
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+#회사용
+import matplotlib.font_manager as fm  # 상단 import에 없다면 추가
+
+def _get_font_file() -> Path | None:
+    """Cloud/Local 모두에서 한글 폰트 파일을 찾아 반환"""
+    candidates = [
+        BASE_DIR / "fonts" / "NanumGothic.ttf",   # ✅ Cloud(레포에 넣은 폰트)
+        Path("C:/Windows/Fonts/malgun.ttf"),      # 로컬(윈도우) 보조
+        Path("C:/Windows/Fonts/NanumGothic.ttf"), # 로컬(윈도우) 보조
+    ]
+    return next((p for p in candidates if p.exists()), None)
+
+def _get_font_prop():
+    """Matplotlib용 FontProperties"""
+    font_file = _get_font_file()
+    return fm.FontProperties(fname=str(font_file)) if font_file else None
+
+#
+
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 CACHE_DIR = BASE_DIR / "data" / "dashboard_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,12 +237,21 @@ def build_donut_chart_image(rows: tuple[tuple[str, int, str], ...], sentiment_co
         counterclock=False,
         wedgeprops={"width": 0.42, "edgecolor": "white", "linewidth": 1.2},
         labeldistance=0.78,
-        textprops={"fontsize": 10, "color": "#24453b", "ha": "center", "va": "center", "fontfamily": "Malgun Gothic" if font_path else None},
+        textprops={"fontsize": 10, "color": "#24453b", "ha": "center", "va": "center",
+                   #집노트북용 "fontfamily": "Malgun Gothic" if font_path else None,
+                   #회사용
+                   "fontproperties": _get_font_prop(),
+                   },
     )
 
     centre_circle = plt.Circle((0, 0), 0.38, fc="white")
     ax.add_artist(centre_circle)
-    ax.text(0, 0.02, center_label, ha="center", va="center", fontsize=16, fontweight="bold", color="#24453b", fontfamily="Malgun Gothic" if font_path else None)
+    ax.text(0, 0.02, center_label, ha="center", va="center", fontsize=16, fontweight="bold", color="#24453b",
+            #집노트북용 fontfamily="Malgun Gothic" if font_path else None
+            #회사용
+            fontproperties=_get_font_prop()
+            ,
+           )
     ax.set_aspect("equal")
     plt.margins(0.06)
 
