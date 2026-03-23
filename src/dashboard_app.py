@@ -11,6 +11,8 @@ from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", str((Path(__file__).resolve().parents[1] / "data" / "mplcache").resolve()))
 
+import koreanize_matplotlib
+
 import altair as alt
 import pandas as pd
 import streamlit as st
