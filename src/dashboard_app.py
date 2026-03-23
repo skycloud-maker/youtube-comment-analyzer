@@ -34,6 +34,47 @@ def _get_font_file() -> Path | None:
     ]
     return next((p for p in candidates if p.exists()), None)
 
+#라이트용
+def get_mode() -> str:
+    try:
+        mode = st.query_params.get("mode", "full")  # Streamlit query params [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.query_params)
+    except Exception:
+        mode = "full"
+    return str(mode).lower()
+
+def render_comments_lite(comments_df: pd.DataFrame) -> None:
+    st.subheader("댓글(경량 표시: 샘플/페이지네이션)")
+
+    if comments_df.empty:
+        st.info("댓글 데이터가 없습니다.")
+        return
+
+    # ✅ 페이지 크기(한 번에 보여주는 행 수)
+    page_size = st.selectbox("페이지 크기", [50, 100, 200, 500], index=1)
+
+    # ✅ (중요) 화면 렌더링/메모리 피크를 줄이기 위해 샘플 제한
+    # 전체를 '읽는 것'과 '화면에 그리는 것'은 비용이 다릅니다.
+    max_rows = st.selectbox("최대 로딩 행 수(경량)", [1000, 3000, 5000, 10000], index=1)
+
+    view_df = comments_df
+    if len(view_df) > max_rows:
+        # 최신/대표 기준 정렬이 있으면 그걸 쓰고, 없으면 앞에서부터
+        sort_cols = [c for c in ["published_at", "like_count"] if c in view_df.columns]
+        if sort_cols:
+            view_df = view_df.sort_values(sort_cols, ascending=[False]*len(sort_cols))
+        view_df = view_df.head(max_rows).copy()
+        st.caption(f"전체 {len(comments_df):,}건 중 상위 {len(view_df):,}건만 경량 로딩했습니다.")
+
+    total = len(view_df)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+
+    st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
+    st.dataframe(view_df.iloc[start:end], use_container_width=True, hide_index=True)
+#
+
 def _get_font_prop():
     """Matplotlib용 FontProperties"""
     font_file = _get_font_file()
@@ -1262,6 +1303,128 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         existing = [c for c in cols if c in display.columns]
         st.dataframe(display[existing], use_container_width=True, hide_index=True)
 
+def get_mode() -> str:
+    """URL 파라미터로 모드 선택: ?mode=lite / ?mode=full"""
+    try:
+        mode = st.query_params.get("mode", "full")  # Streamlit query params 
+    except Exception:
+        mode = "full"
+    return str(mode).lower()
+
+
+def render_comments_lite(comments_df: pd.DataFrame) -> None:
+    """댓글은 보여주되, 화면 렌더링/정렬 부담을 줄인 샘플/페이지네이션 뷰"""
+    st.subheader("댓글 (Lite: 샘플/페이지네이션)")
+
+    if comments_df.empty:
+        st.info("댓글 데이터가 없습니다.")
+        return
+
+    # 한 번에 그리는 양을 줄여서(피크 감소) 꺼짐/healthz 문제 완화
+    page_size = st.selectbox("페이지 크기", [50, 100, 200, 500], index=1)
+    max_rows = st.selectbox("최대 로딩 행 수(경량)", [1000, 3000, 5000, 10000], index=1)
+
+    view_df = comments_df
+
+    # 정렬 컬럼이 있으면 최신/좋아요 기준으로 상위만
+    sort_cols = [c for c in ["작성일시", "좋아요 수"] if c in view_df.columns]
+    if len(view_df) > max_rows:
+        if sort_cols:
+            view_df = view_df.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        view_df = view_df.head(max_rows).copy()
+        st.caption(f"전체 {len(comments_df):,}건 중 상위 {len(view_df):,}건만 경량 로딩했습니다.")
+
+    # 보여줄 컬럼만 최소로 (있으면 보여주고 없으면 자동 제외)
+    prefer_cols = [
+        "국가", "감성", "고객여정단계", "브랜드",
+        "작성일시", "좋아요 수",
+        "영상 제목", "영상 링크",
+        "원문 댓글", "한국어 번역",
+        "제거 사유",
+    ]
+    show_cols = [c for c in prefer_cols if c in view_df.columns]
+
+    total = len(view_df)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+
+    st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
+    st.dataframe(view_df.iloc[start:end][show_cols] if show_cols else view_df.iloc[start:end],
+                 use_container_width=True, hide_index=True)
+
+def load_dashboard_data_lite_comments() -> dict[str, pd.DataFrame]:
+    """Lite(댓글 포함): 최근 실행 1개만 + 댓글 컬럼 최소 로딩으로 피크를 낮춤"""
+    # ✅ 별도 캐시 파일을 쓰면 더 안정적이지만, 일단 간단히 리소스 캐시로만 묶습니다.
+    run_dirs = sorted(
+        (path for path in PROCESSED_DIR.iterdir() if path.is_dir()) if PROCESSED_DIR.exists() else [],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    run_dirs = run_dirs[:1]  # ✅ Lite는 최신 1회만
+
+    # Lite에서 필요한 댓글 컬럼(없으면 자동 무시됨)
+    wanted_cols = [
+        "comment_id", "parent_comment_id",
+        "text_display", "text_original",
+        "language_detected",
+        "like_count",
+        "title", "video_url",
+        "published_at",
+        "sentiment_label",
+        "topic_label",
+        "brand_label",
+        "product",
+        "region",
+        "cleaned_text",
+        "comment_validity",
+        "removed_reason",
+        "exclusion_reason",
+    ]
+
+    def _read_frame_cols(path: Path, columns: list[str]) -> pd.DataFrame:
+        if path.exists():
+            try:
+                # parquet이면 columns 옵션 사용(메모리 절약)
+                if path.suffix.lower() == ".parquet":
+                    return pd.read_parquet(path, columns=columns)
+                return pd.read_parquet(path)
+            except Exception:
+                try:
+                    return pd.read_parquet(path)
+                except Exception:
+                    pass
+        csv_path = path.with_suffix(".csv")
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            keep = [c for c in columns if c in df.columns]
+            return df[keep] if keep else df
+        return pd.DataFrame()
+
+    comments_frames = []
+    videos_frames = []
+
+    for run_dir in run_dirs:
+        # 댓글(필수)
+        comments_frames.append(_read_frame_cols(run_dir / "comments.parquet", wanted_cols))
+        # 영상(선택: 링크 표시용)
+        videos_frames.append(_read_frame_cols(run_dir / "videos_normalized.parquet", []))
+
+    comments_df = pd.concat([f for f in comments_frames if not f.empty], ignore_index=True) if any(not f.empty for f in comments_frames) else pd.DataFrame()
+    videos_df = pd.concat([f for f in videos_frames if not f.empty], ignore_index=True) if any(not f.empty for f in videos_frames) else pd.DataFrame()
+
+    return {"comments": comments_df, "videos": videos_df}
+
+
+@st.cache_resource
+def get_dashboard_data_resource_lite_comments():
+    return load_dashboard_data_lite_comments()
+
+
+
+
+
 
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
@@ -1282,24 +1445,48 @@ def main() -> None:
     
     # 기존코드 data = load_dashboard_data()
     #회사 부팅 최적화용 추가
-    with st.spinner("데이터 로딩 중…"):
+    mode = get_mode()  # ✅ 먼저 모드 결정 (?mode=lite / ?mode=full)
+
+with st.spinner("데이터 로딩 중…"):
+    # ✅ Lite면 Lite용 경량 로더(댓글 포함)로 로딩
+    if mode == "lite":
+        data = get_dashboard_data_resource_lite_comments()
+    else:
         data = get_dashboard_data_resource()
-    #
-    comments_df = add_localized_columns(data["comments"])
-    if comments_df.empty:
-        st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
-        return
 
-    videos_df = data["videos"].copy()
-    videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
-    products = [value for value in PRODUCT_ORDER if value in comments_df["product"].astype(str).unique().tolist()]
-    regions = [value for value in [localize_region("KR"), localize_region("US")] if value in comments_df[COL_COUNTRY].astype(str).unique().tolist()]
-    sentiments = [value for value in [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")] if value in comments_df[COL_SENTIMENT].astype(str).unique().tolist()]
-    cej_labels = [value for value in CEJ_ORDER if value in comments_df[COL_CEJ].astype(str).unique().tolist()]
+comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
+if comments_df.empty:
+    st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
+    return
 
-    st.markdown("## 가전 VoC Dashboard")
-    st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
-    st.caption("Build: 2026-03-22 23:25 / representative-header-render-fix-2")
+# =====================================================
+# ✅ Lite / Full 분기 (기존 full은 그대로 유지)
+# =====================================================
+if mode == "lite":
+    st.markdown("## 가전 VoC Dashboard (Lite)")
+    st.caption("댓글은 포함하되, 샘플/페이지네이션 방식으로 빠르게 표시합니다.")
+    render_comments_lite(comments_df)
+
+    st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
+    st.markdown("- 전체 모드: `?mode=full`")
+    st.markdown("- Lite 모드: `?mode=lite`")
+    return
+
+# =====================================================
+# ✅ 여기부터는 기존 Full 모드 (당신 기존 코드 그대로)
+# =====================================================
+
+videos_df = data["videos"].copy()
+videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
+products = [value for value in PRODUCT_ORDER if value in comments_df["product"].astype(str).unique().tolist()]
+regions = [value for value in [localize_region("KR"), localize_region("US")] if value in comments_df[COL_COUNTRY].astype(str).unique().tolist()]
+sentiments = [value for value in [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")] if value in comments_df[COL_SENTIMENT].astype(str).unique().tolist()]
+cej_labels = [value for value in CEJ_ORDER if value in comments_df[COL_CEJ].astype(str).unique().tolist()]
+
+st.markdown("## 가전 VoC Dashboard")
+st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
+st.caption("Build: 2026-03-22 23:25 / representative-header-render-fix-2")
+
 
     with st.sidebar:
         st.markdown("### 탐색 필터")
