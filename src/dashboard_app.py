@@ -1276,7 +1276,7 @@ def main() -> None:
         st.title("가전 VoC Dashboard")
         st.caption("초기화 중입니다… (첫 로딩 안정화)")
         st.info("잠시 후 자동으로 데이터 로딩을 시작합니다.")
-        st.experimental_rerun()   # ✅ 여기서 바로 재실행
+        st.rerun()   # ✅ 여기서 바로 재실행
 
     #
 
