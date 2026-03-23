@@ -31,7 +31,16 @@ REGION_LABELS = {"KR": "한국", "US": "미국"}
 SENTIMENT_LABELS = {"positive": "\uae0d\uc815", "negative": "\ubd80\uc815", "neutral": "\uc911\ub9bd", "excluded": "\uc81c\uc678"}
 CEJ_ORDER = ["인지", "구매", "배송", "설치", "사용준비", "사용", "관리교체", "기타"]
 PRODUCT_ORDER = ["세탁기", "냉장고", "건조기", "식기세척기"]
-FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
+
+
+#집노트북용 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
+#회사용
+FONT_CANDIDATES = [
+    BASE_DIR / "fonts" / "NanumGothic.ttf",          # ✅ Streamlit Cloud용(레포 안 폰트)
+    Path("C:/Windows/Fonts/malgun.ttf"),             # 로컬(윈도우)용
+    Path("C:/Windows/Fonts/NanumGothic.ttf"),        # 로컬(윈도우)용
+]
+
 
 COL_COUNTRY = "국가"
 COL_SENTIMENT = "감성"
@@ -138,17 +147,38 @@ def build_wordcloud_image(frequencies: tuple[tuple[str, int], ...], sentiment_co
     from wordcloud import WordCloud
     import matplotlib.pyplot as plt
 
-    font_path = next((str(path) for path in FONT_CANDIDATES if path.exists()), None)
+#
+    
+# 집 노트북용
+#    font_path = next((str(path) for path in FONT_CANDIDATES if path.exists()), None)
+#    wc = WordCloud(
+#        width=1000,
+#        height=420,
+#        background_color="white",
+#        colormap="Greens" if sentiment_code == "positive" else "Oranges",
+#        font_path=font_path,
+#        prefer_horizontal=0.9,
+#        max_words=60,
+#        collocations=False,
+#    ).generate_from_frequencies(dict(frequencies))
+
+
+    # 회사용
+    font_file = next((path for path in FONT_CANDIDATES if path.exists()), None)
+    if font_file is None:
+        raise RuntimeError("WordCloud용 한글 폰트를 찾지 못했습니다. fonts/NanumGothic.ttf를 레포에 추가하세요.")
     wc = WordCloud(
         width=1000,
         height=420,
         background_color="white",
         colormap="Greens" if sentiment_code == "positive" else "Oranges",
-        font_path=font_path,
+        font_path=str(font_file),   # ✅ 무조건 실제 파일 경로가 들어가게 됨
         prefer_horizontal=0.9,
         max_words=60,
         collocations=False,
     ).generate_from_frequencies(dict(frequencies))
+
+#
     fig, ax = plt.subplots(figsize=(10, 4.2))
     ax.imshow(wc, interpolation="bilinear")
     ax.axis("off")
