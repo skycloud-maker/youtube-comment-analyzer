@@ -89,12 +89,9 @@ COL_SENTIMENT_CODE = "sentiment_code"
 #        if meta.get("signature") == latest_signature:
 #            return pd.read_pickle(CACHE_FILE)
 #회사에서 공유용으로 수정
-#삭제 @st.cache_data(show_spinner=False)
+
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
-    @st.cache_resource
-    def get_dashboard_data_resource():
-        return load_dashboard_data()
-        
+    
     
     # ✅ 캐시가 있으면 일단 즉시 사용 (초기 로딩/health-check 안정화)
     if CACHE_FILE.exists():
@@ -113,8 +110,6 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
                 return pd.read_pickle(CACHE_FILE)
         except Exception:
             pass
-
-
     #
 
 
@@ -179,6 +174,10 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
     pd.to_pickle(data, CACHE_FILE)
     CACHE_META.write_text(json.dumps({"signature": latest_signature}, ensure_ascii=False), encoding="utf-8")
     return data
+
+@st.cache_resource
+def get_dashboard_data_resource():
+    return load_dashboard_data()
 
 
 @st.cache_data(show_spinner=False)
