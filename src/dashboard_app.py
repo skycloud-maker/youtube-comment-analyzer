@@ -1284,7 +1284,7 @@ def main() -> None:
     # 기존코드 data = load_dashboard_data()
     #회사 부팅 최적화용 추가
     with st.spinner("데이터 로딩 중…"):
-    data = get_dashboard_data_resource()
+        data = get_dashboard_data_resource()
     #
     comments_df = add_localized_columns(data["comments"])
     if comments_df.empty:
