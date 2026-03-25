@@ -26,6 +26,8 @@ data/dashboard_cache/
 !data/dashboard_cache/
 !data/dashboard_cache/dashboard_bundle.pkl
 !data/dashboard_cache/dashboard_bundle_meta.json
+!data/dashboard_cache/dashboard_bundle_cloud.pkl
+!data/dashboard_cache/dashboard_bundle_cloud_meta.json
 data/mplcache/
 config/*.yaml
 !config/settings.example.yaml

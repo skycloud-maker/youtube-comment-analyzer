@@ -90,6 +90,8 @@ CACHE_DIR = BASE_DIR / "data" / "dashboard_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_FILE = CACHE_DIR / "dashboard_bundle.pkl"
 CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
+CLOUD_CACHE_FILE = CACHE_DIR / "dashboard_bundle_cloud.pkl"
+CLOUD_CACHE_META = CACHE_DIR / "dashboard_bundle_cloud_meta.json"
 CACHE_VERSION = "2026-03-25-2355"
 REGION_LABELS = {"KR": "한국", "US": "미국"}
 SENTIMENT_LABELS = {"positive": "\uae0d\uc815", "negative": "\ubd80\uc815", "neutral": "\uc911\ub9bd", "excluded": "\uc81c\uc678"}
@@ -141,10 +143,21 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         except Exception:
             pass
 
+    if CLOUD_CACHE_FILE.exists():
+        try:
+            return pd.read_pickle(CLOUD_CACHE_FILE)
+        except Exception:
+            pass
+
     buckets: dict[str, list[pd.DataFrame]] = {
         "comments": [],
         "videos": [],
+        "brand_ratio": [],
+        "cej_negative_rate": [],
         "negative_density": [],
+        "new_issue_keywords": [],
+        "persistent_issue_keywords": [],
+        "quality_summary": [],
         "representative_comments": [],
         "representative_bundles": [],
         "opinion_units": [],
@@ -160,7 +173,12 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         for key, filename in [
             ("comments", "comments.parquet"),
             ("videos", "videos.parquet"),
+            ("brand_ratio", "brand_ratio.parquet"),
+            ("cej_negative_rate", "cej_negative_rate.parquet"),
             ("negative_density", "negative_density.parquet"),
+            ("new_issue_keywords", "new_issue_keywords.parquet"),
+            ("persistent_issue_keywords", "persistent_issue_keywords.parquet"),
+            ("quality_summary", "quality_summary.parquet"),
             ("representative_comments", "representative_comments.parquet"),
             ("representative_bundles", "representative_bundles.parquet"),
             ("opinion_units", "opinion_units.parquet"),
