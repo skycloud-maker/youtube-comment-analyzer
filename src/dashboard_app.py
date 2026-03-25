@@ -11,6 +11,8 @@ from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", str((Path(__file__).resolve().parents[1] / "data" / "mplcache").resolve()))
 
+import koreanize_matplotlib
+
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -20,6 +22,66 @@ from src.analytics.keywords import build_keyword_counter, filter_business_keywor
 from src.utils.translation import translate_to_korean
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+#회사용
+import matplotlib.font_manager as fm  # 상단 import에 없다면 추가
+
+def _get_font_file() -> Path | None:
+    """Cloud/Local 모두에서 한글 폰트 파일을 찾아 반환"""
+    candidates = [
+        BASE_DIR / "fonts" / "NanumGothic.ttf",   # ✅ Cloud(레포에 넣은 폰트)
+        Path("C:/Windows/Fonts/malgun.ttf"),      # 로컬(윈도우) 보조
+        Path("C:/Windows/Fonts/NanumGothic.ttf"), # 로컬(윈도우) 보조
+    ]
+    return next((p for p in candidates if p.exists()), None)
+
+#라이트용
+def get_mode() -> str:
+    try:
+        mode = st.query_params.get("mode", "full")  # Streamlit query params [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.query_params)
+    except Exception:
+        mode = "full"
+    return str(mode).lower()
+
+def render_comments_lite(comments_df: pd.DataFrame) -> None:
+    st.subheader("댓글(경량 표시: 샘플/페이지네이션)")
+
+    if comments_df.empty:
+        st.info("댓글 데이터가 없습니다.")
+        return
+
+    # ✅ 페이지 크기(한 번에 보여주는 행 수)
+    page_size = st.selectbox("페이지 크기", [50, 100, 200, 500], index=1)
+
+    # ✅ (중요) 화면 렌더링/메모리 피크를 줄이기 위해 샘플 제한
+    # 전체를 '읽는 것'과 '화면에 그리는 것'은 비용이 다릅니다.
+    max_rows = st.selectbox("최대 로딩 행 수(경량)", [1000, 3000, 5000, 10000], index=1)
+
+    view_df = comments_df
+    if len(view_df) > max_rows:
+        # 최신/대표 기준 정렬이 있으면 그걸 쓰고, 없으면 앞에서부터
+        sort_cols = [c for c in ["published_at", "like_count"] if c in view_df.columns]
+        if sort_cols:
+            view_df = view_df.sort_values(sort_cols, ascending=[False]*len(sort_cols))
+        view_df = view_df.head(max_rows).copy()
+        st.caption(f"전체 {len(comments_df):,}건 중 상위 {len(view_df):,}건만 경량 로딩했습니다.")
+
+    total = len(view_df)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+
+    st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
+    st.dataframe(view_df.iloc[start:end], use_container_width=True, hide_index=True)
+#
+
+def _get_font_prop():
+    """Matplotlib용 FontProperties"""
+    font_file = _get_font_file()
+    return fm.FontProperties(fname=str(font_file)) if font_file else None
+
+#
+
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 CACHE_DIR = BASE_DIR / "data" / "dashboard_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,12 +90,27 @@ CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
 CACHE_VERSION = "2026-03-25-2355"
 REGION_LABELS = {"KR": "한국", "US": "미국"}
 SENTIMENT_LABELS = {"positive": "\uae0d\uc815", "negative": "\ubd80\uc815", "neutral": "\uc911\ub9bd", "excluded": "\uc81c\uc678"}
+<<<<<<< HEAD
 CEJ_ORDER = ["\uc778\uc9c0", "\ud0d0\uc0c9", "\uacb0\uc815", "\uad6c\ub9e4", "\ubc30\uc1a1", "\uc0ac\uc6a9\uc900\ube44", "\uc0ac\uc6a9", "\uad00\ub9ac", "\uad50\uccb4", "\uae30\ud0c0"]
 PRIMARY_PRODUCT_FILTERS = ["\ub0c9\uc7a5\uace0", "\uc138\ud0c1\uae30", "\uac74\uc870\uae30", "\uc2dd\uae30\uc138\ucc99\uae30", "\uccad\uc18c\uae30", "\uc624\ube10"]
 EXTRA_PRODUCT_FILTERS = ["\uc815\uc218\uae30", "\uc778\ub355\uc158", "\uc640\uc778\uc140\ub7ec", "\ucef5\uc138\ucc99\uae30", "\uc2e4\ub0b4\uc2dd\ubb3c\uc7ac\ubc30\uae30(\ud2d4\uc6b4)"]
 PRODUCT_ORDER = PRIMARY_PRODUCT_FILTERS + EXTRA_PRODUCT_FILTERS
 BRAND_FILTER_OPTIONS = ["LG", "Samsung", "GE", "Whirlpool"]
 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
+=======
+CEJ_ORDER = ["인지", "구매", "배송", "설치", "사용준비", "사용", "관리교체", "기타"]
+PRODUCT_ORDER = ["세탁기", "냉장고", "건조기", "식기세척기"]
+
+
+#집노트북용 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
+#회사용
+FONT_CANDIDATES = [
+    BASE_DIR / "fonts" / "NanumGothic.ttf",          # ✅ Streamlit Cloud용(레포 안 폰트)
+    Path("C:/Windows/Fonts/malgun.ttf"),             # 로컬(윈도우)용
+    Path("C:/Windows/Fonts/NanumGothic.ttf"),        # 로컬(윈도우)용
+]
+
+>>>>>>> df4782b54075ef82c4a8afff1cde4235d83e9a0e
 
 COL_COUNTRY = "국가"
 COL_SENTIMENT = "감성"
@@ -56,12 +133,43 @@ COL_SENTIMENT_CODE = "sentiment_code"
 
 
 @st.cache_data(show_spinner=False)
+#def load_dashboard_data() -> dict[str, pd.DataFrame]:
+#    latest_signature = _latest_signature()
+#    if CACHE_FILE.exists() and CACHE_META.exists():
+#        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+#        if meta.get("signature") == latest_signature:
+#            return pd.read_pickle(CACHE_FILE)
+#회사에서 공유용으로 수정
+
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
+<<<<<<< HEAD
     latest_signature = _latest_signature()
     if CACHE_FILE.exists() and CACHE_META.exists():
         meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
         if meta.get("signature") == latest_signature and meta.get("version") == CACHE_VERSION:
+=======
+    
+    
+    # ✅ 캐시가 있으면 일단 즉시 사용 (초기 로딩/health-check 안정화)
+    if CACHE_FILE.exists():
+        try:
+>>>>>>> df4782b54075ef82c4a8afff1cde4235d83e9a0e
             return pd.read_pickle(CACHE_FILE)
+        except Exception:
+            pass  # 캐시가 깨졌으면 아래에서 재생성
+
+    # ✅ 캐시가 없을 때만 무거운 시그니처 계산
+    latest_signature = _latest_signature()
+
+    if CACHE_FILE.exists() and CACHE_META.exists():
+        try:
+            meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
+            if meta.get("signature") == latest_signature:
+                return pd.read_pickle(CACHE_FILE)
+        except Exception:
+            pass
+    #
+
 
     if CACHE_FILE.exists() and (not PROCESSED_DIR.exists() or not any(PROCESSED_DIR.iterdir())):
         return pd.read_pickle(CACHE_FILE)
@@ -87,6 +195,12 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+
+    #회사 공유용으로 추가
+    run_dirs = run_dirs[:3]   # ✅ 최근 5개만 읽기 (원하면 3~10으로 조절)
+
+    #
+    
     for run_dir in run_dirs:
         manifest_path = run_dir / "run_manifest.json"
         if not manifest_path.exists():
@@ -127,6 +241,10 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
     CACHE_META.write_text(json.dumps({"signature": latest_signature}, ensure_ascii=False), encoding="utf-8")
     return data
 
+@st.cache_resource
+def get_dashboard_data_resource():
+    return load_dashboard_data()
+
 
 @st.cache_data(show_spinner=False)
 def build_keyword_summary(texts: tuple[str, ...], top_n: int = 6, version: str = "v5") -> pd.DataFrame:
@@ -148,17 +266,38 @@ def build_wordcloud_image(frequencies: tuple[tuple[str, int], ...], sentiment_co
     from wordcloud import WordCloud
     import matplotlib.pyplot as plt
 
-    font_path = next((str(path) for path in FONT_CANDIDATES if path.exists()), None)
+#
+    
+# 집 노트북용
+#    font_path = next((str(path) for path in FONT_CANDIDATES if path.exists()), None)
+#    wc = WordCloud(
+#        width=1000,
+#        height=420,
+#        background_color="white",
+#        colormap="Greens" if sentiment_code == "positive" else "Oranges",
+#        font_path=font_path,
+#        prefer_horizontal=0.9,
+#        max_words=60,
+#        collocations=False,
+#    ).generate_from_frequencies(dict(frequencies))
+
+
+    # 회사용
+    font_file = next((path for path in FONT_CANDIDATES if path.exists()), None)
+    if font_file is None:
+        raise RuntimeError("WordCloud용 한글 폰트를 찾지 못했습니다. fonts/NanumGothic.ttf를 레포에 추가하세요.")
     wc = WordCloud(
         width=1000,
         height=420,
         background_color="white",
         colormap="Greens" if sentiment_code == "positive" else "Oranges",
-        font_path=font_path,
+        font_path=str(font_file),   # ✅ 무조건 실제 파일 경로가 들어가게 됨
         prefer_horizontal=0.9,
         max_words=60,
         collocations=False,
     ).generate_from_frequencies(dict(frequencies))
+
+#
     fig, ax = plt.subplots(figsize=(10, 4.2))
     ax.imshow(wc, interpolation="bilinear")
     ax.axis("off")
@@ -198,12 +337,21 @@ def build_donut_chart_image(rows: tuple[tuple[str, int, str], ...], sentiment_co
         counterclock=False,
         wedgeprops={"width": 0.42, "edgecolor": "white", "linewidth": 1.2},
         labeldistance=0.78,
-        textprops={"fontsize": 10, "color": "#24453b", "ha": "center", "va": "center", "fontfamily": "Malgun Gothic" if font_path else None},
+        textprops={"fontsize": 10, "color": "#24453b", "ha": "center", "va": "center",
+                   #집노트북용 "fontfamily": "Malgun Gothic" if font_path else None,
+                   #회사용
+                   "fontproperties": _get_font_prop(),
+                   },
     )
 
     centre_circle = plt.Circle((0, 0), 0.38, fc="white")
     ax.add_artist(centre_circle)
-    ax.text(0, 0.02, center_label, ha="center", va="center", fontsize=16, fontweight="bold", color="#24453b", fontfamily="Malgun Gothic" if font_path else None)
+    ax.text(0, 0.02, center_label, ha="center", va="center", fontsize=16, fontweight="bold", color="#24453b",
+            #집노트북용 fontfamily="Malgun Gothic" if font_path else None
+            #회사용
+            fontproperties=_get_font_prop()
+            ,
+           )
     ax.set_aspect("equal")
     plt.margins(0.06)
 
@@ -321,12 +469,30 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     return working
 
 
+#def _latest_signature() -> float:
+#    if not PROCESSED_DIR.exists():
+#        return 0.0
+#    mtimes = [path.stat().st_mtime for path in PROCESSED_DIR.rglob("*.parquet")]
+#    return max(mtimes) if mtimes else 0.0
+#회사에서 공유용으로 수정
 def _latest_signature() -> float:
     if not PROCESSED_DIR.exists():
         return 0.0
-    mtimes = [path.stat().st_mtime for path in PROCESSED_DIR.rglob("*.parquet")]
-    return max(mtimes) if mtimes else 0.0
 
+    # ✅ 너무 많은 파일을 다 훑지 않도록 상한을 둬서 startup을 안정화
+    mt = 0.0
+    count = 0
+    try:
+        for path in PROCESSED_DIR.rglob("*.parquet"):
+            mt = max(mt, path.stat().st_mtime)
+            count += 1
+            if count >= 200:   # ✅ 상한(원하면 200~500 사이로)
+                break
+    except Exception:
+        pass
+    return mt
+
+#
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
@@ -1457,15 +1623,113 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         existing = [c for c in cols if c in display.columns]
         st.dataframe(display[existing], use_container_width=True, hide_index=True)
 
+def get_mode() -> str:
+    """URL 파라미터로 모드 선택: ?mode=lite / ?mode=full"""
+    try:
+        mode = st.query_params.get("mode", "full")  # Streamlit query params 
+    except Exception:
+        mode = "full"
+    return str(mode).lower()
 
+
+def render_comments_lite(comments_df: pd.DataFrame) -> None:
+    """댓글은 보여주되, 화면 렌더링/정렬 부담을 줄인 샘플/페이지네이션 뷰"""
+    st.subheader("댓글 (Lite: 샘플/페이지네이션)")
+
+    if comments_df.empty:
+        st.info("댓글 데이터가 없습니다.")
+        return
+
+    # 한 번에 그리는 양을 줄여서(피크 감소) 꺼짐/healthz 문제 완화
+    page_size = st.selectbox("페이지 크기", [50, 100, 200, 500], index=1)
+    max_rows = st.selectbox("최대 로딩 행 수(경량)", [1000, 3000, 5000, 10000], index=1)
+
+    view_df = comments_df
+
+    # 정렬 컬럼이 있으면 최신/좋아요 기준으로 상위만
+    sort_cols = [c for c in ["작성일시", "좋아요 수"] if c in view_df.columns]
+    if len(view_df) > max_rows:
+        if sort_cols:
+            view_df = view_df.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        view_df = view_df.head(max_rows).copy()
+        st.caption(f"전체 {len(comments_df):,}건 중 상위 {len(view_df):,}건만 경량 로딩했습니다.")
+
+    # 보여줄 컬럼만 최소로 (있으면 보여주고 없으면 자동 제외)
+    prefer_cols = [
+        "국가", "감성", "고객여정단계", "브랜드",
+        "작성일시", "좋아요 수",
+        "영상 제목", "영상 링크",
+        "원문 댓글", "한국어 번역",
+        "제거 사유",
+    ]
+    show_cols = [c for c in prefer_cols if c in view_df.columns]
+
+    total = len(view_df)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+
+    st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
+    st.dataframe(view_df.iloc[start:end][show_cols] if show_cols else view_df.iloc[start:end],
+                 use_container_width=True, hide_index=True)
+def load_dashboard_data_lite_comments() -> dict[str, pd.DataFrame]:
+    """
+    Lite(댓글 포함):
+    - 기존 load_dashboard_data()를 그대로 재사용 (파일명/컬럼명 불일치로 비는 문제 방지)
+    - 댓글은 표시하되, 너무 큰 경우 상위 N건만 잡아서 렌더/메모리 피크를 낮춤
+    """
+    data = load_dashboard_data()  # ✅ 이미 검증된 full 로더 재사용
+
+    comments_df = data.get("comments", pd.DataFrame())
+    if not comments_df.empty:
+        # ✅ Lite에서는 너무 많이 잡지 않게 상한(필요시 3000~10000 조절)
+        comments_df = comments_df.head(1000).copy()
+    data["comments"] = comments_df
+
+    return data
+
+
+@st.cache_resource
+def get_dashboard_data_resource_lite_comments():
+    return load_dashboard_data_lite_comments()
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
-    data = load_dashboard_data()
-    comments_df = add_localized_columns(data["comments"])
+
+    
+    # 기존코드 data = load_dashboard_data()
+    #회사 부팅 최적화용 추가
+    mode = get_mode()  # ✅ 먼저 모드 결정 (?mode=lite / ?mode=full)
+
+    with st.spinner("데이터 로딩 중…"):
+        # ✅ Lite면 Lite용 경량 로더(댓글 포함)로 로딩
+        if mode == "lite":
+            data = get_dashboard_data_resource_lite_comments()
+        else:
+            data = get_dashboard_data_resource()
+
+    comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
     if comments_df.empty:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
         return
+
+    # =====================================================
+    # ✅ Lite / Full 분기 (기존 full은 그대로 유지)
+    # =====================================================
+    if mode == "lite":
+        st.markdown("## 가전 VoC Dashboard (Lite)")
+        st.caption("댓글은 포함하되, 샘플/페이지네이션 방식으로 빠르게 표시합니다.")
+        render_comments_lite(comments_df)
+
+        st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
+        st.markdown("- 전체 모드: `?mode=full`")
+        st.markdown("- Lite 모드: `?mode=lite`")
+        return
+
+    # =====================================================
+    # ✅ 여기부터는 기존 Full 모드 (당신 기존 코드 그대로)
+    # =====================================================
 
     videos_df = data["videos"].copy()
     videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
@@ -1480,6 +1744,7 @@ def main() -> None:
     st.markdown("## 가전 VoC Dashboard")
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
     st.caption("Build: 2026-03-26 03:20 / representative-label-fix-4")
+
 
     with st.sidebar:
         st.markdown("### \ud0d0\uc0c9 \ud544\ud130")
