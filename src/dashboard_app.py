@@ -11,7 +11,10 @@ from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", str((Path(__file__).resolve().parents[1] / "data" / "mplcache").resolve()))
 
-import koreanize_matplotlib
+try:
+    import koreanize_matplotlib  # type: ignore
+except Exception:
+    koreanize_matplotlib = None
 
 import altair as alt
 import pandas as pd
@@ -95,7 +98,11 @@ PRIMARY_PRODUCT_FILTERS = ["\ub0c9\uc7a5\uace0", "\uc138\ud0c1\uae30", "\uac74\u
 EXTRA_PRODUCT_FILTERS = ["\uc815\uc218\uae30", "\uc778\ub355\uc158", "\uc640\uc778\uc140\ub7ec", "\ucef5\uc138\ucc99\uae30", "\uc2e4\ub0b4\uc2dd\ubb3c\uc7ac\ubc30\uae30(\ud2d4\uc6b4)"]
 PRODUCT_ORDER = PRIMARY_PRODUCT_FILTERS + EXTRA_PRODUCT_FILTERS
 BRAND_FILTER_OPTIONS = ["LG", "Samsung", "GE", "Whirlpool"]
-FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
+FONT_CANDIDATES = [
+    BASE_DIR / "fonts" / "NanumGothic.ttf",
+    Path("C:/Windows/Fonts/malgun.ttf"),
+    Path("C:/Windows/Fonts/NanumGothic.ttf"),
+]
 
 COL_COUNTRY = "국가"
 COL_SENTIMENT = "감성"
@@ -219,7 +226,7 @@ def build_wordcloud_image(frequencies: tuple[tuple[str, int], ...], sentiment_co
     # 회사용
     font_file = next((path for path in FONT_CANDIDATES if path.exists()), None)
     if font_file is None:
-        raise RuntimeError("WordCloud용 한글 폰트를 찾지 못했습니다. fonts/NanumGothic.ttf를 레포에 추가하세요.")
+        return None
     wc = WordCloud(
         width=1000,
         height=420,
