@@ -90,27 +90,12 @@ CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
 CACHE_VERSION = "2026-03-25-2355"
 REGION_LABELS = {"KR": "한국", "US": "미국"}
 SENTIMENT_LABELS = {"positive": "\uae0d\uc815", "negative": "\ubd80\uc815", "neutral": "\uc911\ub9bd", "excluded": "\uc81c\uc678"}
-<<<<<<< HEAD
 CEJ_ORDER = ["\uc778\uc9c0", "\ud0d0\uc0c9", "\uacb0\uc815", "\uad6c\ub9e4", "\ubc30\uc1a1", "\uc0ac\uc6a9\uc900\ube44", "\uc0ac\uc6a9", "\uad00\ub9ac", "\uad50\uccb4", "\uae30\ud0c0"]
 PRIMARY_PRODUCT_FILTERS = ["\ub0c9\uc7a5\uace0", "\uc138\ud0c1\uae30", "\uac74\uc870\uae30", "\uc2dd\uae30\uc138\ucc99\uae30", "\uccad\uc18c\uae30", "\uc624\ube10"]
 EXTRA_PRODUCT_FILTERS = ["\uc815\uc218\uae30", "\uc778\ub355\uc158", "\uc640\uc778\uc140\ub7ec", "\ucef5\uc138\ucc99\uae30", "\uc2e4\ub0b4\uc2dd\ubb3c\uc7ac\ubc30\uae30(\ud2d4\uc6b4)"]
 PRODUCT_ORDER = PRIMARY_PRODUCT_FILTERS + EXTRA_PRODUCT_FILTERS
 BRAND_FILTER_OPTIONS = ["LG", "Samsung", "GE", "Whirlpool"]
 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
-=======
-CEJ_ORDER = ["인지", "구매", "배송", "설치", "사용준비", "사용", "관리교체", "기타"]
-PRODUCT_ORDER = ["세탁기", "냉장고", "건조기", "식기세척기"]
-
-
-#집노트북용 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
-#회사용
-FONT_CANDIDATES = [
-    BASE_DIR / "fonts" / "NanumGothic.ttf",          # ✅ Streamlit Cloud용(레포 안 폰트)
-    Path("C:/Windows/Fonts/malgun.ttf"),             # 로컬(윈도우)용
-    Path("C:/Windows/Fonts/NanumGothic.ttf"),        # 로컬(윈도우)용
-]
-
->>>>>>> df4782b54075ef82c4a8afff1cde4235d83e9a0e
 
 COL_COUNTRY = "국가"
 COL_SENTIMENT = "감성"
@@ -133,56 +118,26 @@ COL_SENTIMENT_CODE = "sentiment_code"
 
 
 @st.cache_data(show_spinner=False)
-#def load_dashboard_data() -> dict[str, pd.DataFrame]:
-#    latest_signature = _latest_signature()
-#    if CACHE_FILE.exists() and CACHE_META.exists():
-#        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
-#        if meta.get("signature") == latest_signature:
-#            return pd.read_pickle(CACHE_FILE)
-#회사에서 공유용으로 수정
-
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
-<<<<<<< HEAD
     latest_signature = _latest_signature()
-    if CACHE_FILE.exists() and CACHE_META.exists():
-        meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
-        if meta.get("signature") == latest_signature and meta.get("version") == CACHE_VERSION:
-=======
-    
-    
-    # ✅ 캐시가 있으면 일단 즉시 사용 (초기 로딩/health-check 안정화)
-    if CACHE_FILE.exists():
-        try:
->>>>>>> df4782b54075ef82c4a8afff1cde4235d83e9a0e
-            return pd.read_pickle(CACHE_FILE)
-        except Exception:
-            pass  # 캐시가 깨졌으면 아래에서 재생성
-
-    # ✅ 캐시가 없을 때만 무거운 시그니처 계산
-    latest_signature = _latest_signature()
-
     if CACHE_FILE.exists() and CACHE_META.exists():
         try:
             meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
-            if meta.get("signature") == latest_signature:
+            if meta.get("signature") == latest_signature and meta.get("version") == CACHE_VERSION:
                 return pd.read_pickle(CACHE_FILE)
         except Exception:
             pass
-    #
 
-
-    if CACHE_FILE.exists() and (not PROCESSED_DIR.exists() or not any(PROCESSED_DIR.iterdir())):
-        return pd.read_pickle(CACHE_FILE)
+    if CACHE_FILE.exists():
+        try:
+            return pd.read_pickle(CACHE_FILE)
+        except Exception:
+            pass
 
     buckets: dict[str, list[pd.DataFrame]] = {
         "comments": [],
         "videos": [],
-        "brand_ratio": [],
-        "cej_negative_rate": [],
         "negative_density": [],
-        "new_issue_keywords": [],
-        "persistent_issue_keywords": [],
-        "quality_summary": [],
         "representative_comments": [],
         "representative_bundles": [],
         "opinion_units": [],
@@ -190,38 +145,16 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         "monitoring_summary": [],
         "reporting_summary": [],
     }
-    run_dirs = sorted(
-        (path for path in PROCESSED_DIR.iterdir() if path.is_dir()) if PROCESSED_DIR.exists() else [],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
 
-    #회사 공유용으로 추가
-    run_dirs = run_dirs[:3]   # ✅ 최근 5개만 읽기 (원하면 3~10으로 조절)
-
-    #
-    
-    for run_dir in run_dirs:
-        manifest_path = run_dir / "run_manifest.json"
-        if not manifest_path.exists():
+    for run_dir in sorted(PROCESSED_DIR.iterdir()) if PROCESSED_DIR.exists() else []:
+        if not run_dir.is_dir():
             continue
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        config_json = manifest.get("config_json", {})
-        context = {
-            "run_id": manifest.get("run_id"),
-            "product": config_json.get("product") or config_json.get("keyword"),
-            "region": config_json.get("region"),
-        }
+        context = {"run_id": run_dir.name}
         for key, filename in [
             ("comments", "comments.parquet"),
-            ("videos", "videos_normalized.parquet"),
-            ("brand_ratio", "brand_ratio.parquet"),
-            ("cej_negative_rate", "cej_negative_rate.parquet"),
+            ("videos", "videos.parquet"),
             ("negative_density", "negative_density.parquet"),
-            ("new_issue_keywords", "new_issue_keywords.parquet"),
-            ("persistent_issue_keywords", "persistent_issue_keywords.parquet"),
-            ("quality_summary", "quality_summary.parquet"),
-("representative_comments", "representative_comments.parquet"),
+            ("representative_comments", "representative_comments.parquet"),
             ("representative_bundles", "representative_bundles.parquet"),
             ("opinion_units", "opinion_units.parquet"),
             ("analysis_comments", "analysis_comments.parquet"),
@@ -238,8 +171,9 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
 
     data = {key: pd.concat(frames, ignore_index=True) if frames else pd.DataFrame() for key, frames in buckets.items()}
     pd.to_pickle(data, CACHE_FILE)
-    CACHE_META.write_text(json.dumps({"signature": latest_signature}, ensure_ascii=False), encoding="utf-8")
+    CACHE_META.write_text(json.dumps({"signature": latest_signature, "version": CACHE_VERSION}, ensure_ascii=False), encoding="utf-8")
     return data
+
 
 @st.cache_resource
 def get_dashboard_data_resource():
@@ -1744,6 +1678,7 @@ def main() -> None:
     st.markdown("## 가전 VoC Dashboard")
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
     st.caption("Build: 2026-03-26 03:20 / representative-label-fix-4")
+
 
 
     with st.sidebar:
