@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.analytics.text_cleaning import clean_text, classify_comment_quality, detect_language_hint
+from src.utils.privacy import detect_pii, extract_external_links, mask_pii_text
 from src.utils.io import ensure_dir, write_dataframe
 
 
@@ -32,6 +33,15 @@ class NormalizePipeline:
             normalized_comments["exclusion_reason"] = normalized_comments["comment_quality"].where(normalized_comments["comment_validity"] == "excluded", pd.NA)
             normalized_comments["analysis_included"] = normalized_comments["comment_validity"].eq("valid") & normalized_comments["cleaned_text"].ne("")
             normalized_comments["removed_reason"] = normalized_comments["exclusion_reason"].fillna("")
+            pii_payload = normalized_comments["text_original"].map(detect_pii)
+            normalized_comments["pii_flag"] = pii_payload.map(lambda item: item[0])
+            normalized_comments["pii_types"] = pii_payload.map(lambda item: item[1])
+            normalized_comments["pii_raw_text"] = pii_payload.map(lambda item: item[2])
+            normalized_comments["masked_text"] = normalized_comments.apply(lambda row: mask_pii_text(row.get("text_original", ""), row.get("pii_raw_text", "")), axis=1)
+            normalized_comments["external_links"] = normalized_comments["text_original"].map(extract_external_links)
+            normalized_comments["context_attachment"] = normalized_comments["external_links"].map(lambda items: items[0] if items else "")
+            normalized_comments["source_type"] = normalized_comments.get("source_type", "YT_COMMENT")
+            normalized_comments["live_chat_included"] = False
             normalized_comments = normalized_comments.drop_duplicates(subset=["video_id", "comment_id"], keep="last").reset_index(drop=True)
 
         run_dir = ensure_dir(self.processed_dir / run_id)

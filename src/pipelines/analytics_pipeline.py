@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -9,6 +10,12 @@ import pandas as pd
 
 from src.analytics.brands import infer_brand
 from src.analytics.comment_analysis import analyze_comment_with_context
+from src.analytics.opinion_units import (
+    build_opinion_units,
+    build_representative_bundles,
+    build_representative_section_payload,
+    build_source_records,
+)
 from src.analytics.clustering import assign_clusters
 from src.analytics.descriptive import build_descriptive_metrics
 from src.analytics.keywords import extract_keywords
@@ -79,6 +86,28 @@ class AnalyticsPipeline:
         working_comments["sentiment_label"] = working_comments["sentiment_label"].where(working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"), pd.NA)
 
         metrics = build_descriptive_metrics(videos_df, working_comments)
+        opinion_units = build_opinion_units(analysis_comments)
+        if not opinion_units.empty:
+            source_counts = opinion_units.groupby("source_content_id").agg(opinion_count=("opinion_id", "count")).reset_index()
+            analysis_comments = analysis_comments.merge(source_counts, left_on="comment_id", right_on="source_content_id", how="left")
+            analysis_comments.drop(columns=["source_content_id"], inplace=True, errors="ignore")
+            analysis_comments["source_count"] = 1
+            analysis_comments["opinion_count"] = analysis_comments["opinion_count"].fillna(1).astype(int)
+            working_comments = working_comments.merge(source_counts, left_on="comment_id", right_on="source_content_id", how="left")
+            working_comments.drop(columns=["source_content_id"], inplace=True, errors="ignore")
+            working_comments["source_count"] = 1
+            working_comments["opinion_count"] = working_comments["opinion_count"].fillna(1).astype(int)
+        else:
+            analysis_comments["source_count"] = 1
+            analysis_comments["opinion_count"] = 1
+            working_comments["source_count"] = 1
+            working_comments["opinion_count"] = 1
+
+        representative_bundles = build_representative_bundles(opinion_units)
+        source_records = build_source_records(opinion_units)
+        representative_section = build_representative_section_payload(representative_bundles)
+        monitoring_summary = self._monitoring_summary(opinion_units)
+        reporting_summary = self._reporting_summary(opinion_units)
         keyword_df = extract_keywords(analysis_comments["cleaned_text"] if not analysis_comments.empty else pd.Series(dtype=str), self.top_n_keywords)
         sentiment_summary = self._summary_by_label(analysis_comments, "sentiment_label")
         topic_summary = self._summary_by_label(analysis_comments, "topic_label")
@@ -95,6 +124,10 @@ class AnalyticsPipeline:
             **metrics,
             "comments": working_comments,
             "analysis_comments": analysis_comments,
+            "opinion_units": opinion_units,
+            "representative_bundles": representative_bundles,
+            "monitoring_summary": monitoring_summary,
+            "reporting_summary": reporting_summary,
             "keyword_analysis": keyword_df,
             "sentiment_summary": sentiment_summary,
             "topic_summary": topic_summary,
@@ -113,6 +146,8 @@ class AnalyticsPipeline:
         for name, frame in outputs.items():
             if isinstance(frame, pd.DataFrame):
                 write_dataframe(frame, run_dir / f"{name}.parquet")
+        (run_dir / "source_records.json").write_text(json.dumps({"source_records": source_records}, ensure_ascii=False, indent=2), encoding="utf-8")
+        (run_dir / "representative_section.json").write_text(json.dumps({"representative_section": representative_section}, ensure_ascii=False, indent=2), encoding="utf-8")
         self.logger.info("Analytics stage completed", extra={"run_id": run_id, "stage": "analytics"})
         return outputs
 
@@ -238,6 +273,47 @@ class AnalyticsPipeline:
         return grouped.sort_values(["product", "region", "negative_rate", "comments"], ascending=[True, True, False, False]).reset_index(drop=True)
 
     @staticmethod
+    @staticmethod
+    def _monitoring_summary(opinion_units_df: pd.DataFrame) -> pd.DataFrame:
+        columns = ["source_count", "opinion_count", "positive_count", "negative_count", "neutral_count", "exclude_count", "neutral_rate", "exclude_rate", "split_rate"]
+        if opinion_units_df.empty:
+            return pd.DataFrame([{col: 0 for col in columns}])
+        source_count = int(opinion_units_df["source_content_id"].nunique())
+        opinion_count = int(len(opinion_units_df))
+        positive_count = int((opinion_units_df["sentiment_code"] == "positive").sum())
+        negative_count = int((opinion_units_df["sentiment_code"] == "negative").sum())
+        neutral_count = int((opinion_units_df["sentiment_code"] == "neutral").sum())
+        exclude_count = int((opinion_units_df["sentiment_code"] == "excluded").sum())
+        split_sources = int((opinion_units_df.groupby("source_content_id")["opinion_id"].count() > 1).sum())
+        return pd.DataFrame([{
+            "source_count": source_count,
+            "opinion_count": opinion_count,
+            "positive_count": positive_count,
+            "negative_count": negative_count,
+            "neutral_count": neutral_count,
+            "exclude_count": exclude_count,
+            "neutral_rate": (neutral_count / opinion_count) if opinion_count else 0.0,
+            "exclude_rate": (exclude_count / opinion_count) if opinion_count else 0.0,
+            "split_rate": (split_sources / source_count) if source_count else 0.0,
+        }])
+
+    @staticmethod
+    def _reporting_summary(opinion_units_df: pd.DataFrame) -> pd.DataFrame:
+        columns = ["positive_count", "negative_count", "kpi_opinion_count", "positive_share", "negative_share"]
+        if opinion_units_df.empty:
+            return pd.DataFrame([{col: 0 for col in columns}])
+        reporting = opinion_units_df[opinion_units_df["sentiment_code"].isin(["positive", "negative"])].copy()
+        positive_count = int((reporting["sentiment_code"] == "positive").sum())
+        negative_count = int((reporting["sentiment_code"] == "negative").sum())
+        total = int(len(reporting))
+        return pd.DataFrame([{
+            "positive_count": positive_count,
+            "negative_count": negative_count,
+            "kpi_opinion_count": total,
+            "positive_share": (positive_count / total) if total else 0.0,
+            "negative_share": (negative_count / total) if total else 0.0,
+        }])
+
     def _negative_density(videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> pd.DataFrame:
         columns = ["product", "region", "video_id", "title", "video_url", "negative_comments", "total_comments", "negative_density"]
         if videos_df.empty:

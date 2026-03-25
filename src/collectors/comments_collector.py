@@ -102,6 +102,8 @@ class CommentsCollector:
             "comment_id": comment_id,
             "parent_comment_id": parent_comment_id,
             "is_reply": is_reply,
+            "source_type": "YT_COMMENT",
+            "live_chat_included": False,
             "author_display_name": snippet.get("authorDisplayName"),
             "author_channel_id": author_channel_id,
             "text_original": text_original,

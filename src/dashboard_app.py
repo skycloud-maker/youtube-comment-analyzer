@@ -25,10 +25,14 @@ CACHE_DIR = BASE_DIR / "data" / "dashboard_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_FILE = CACHE_DIR / "dashboard_bundle.pkl"
 CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
+CACHE_VERSION = "2026-03-25-2355"
 REGION_LABELS = {"KR": "한국", "US": "미국"}
 SENTIMENT_LABELS = {"positive": "\uae0d\uc815", "negative": "\ubd80\uc815", "neutral": "\uc911\ub9bd", "excluded": "\uc81c\uc678"}
-CEJ_ORDER = ["인지", "구매", "배송", "설치", "사용준비", "사용", "관리교체", "기타"]
-PRODUCT_ORDER = ["세탁기", "냉장고", "건조기", "식기세척기"]
+CEJ_ORDER = ["\uc778\uc9c0", "\ud0d0\uc0c9", "\uacb0\uc815", "\uad6c\ub9e4", "\ubc30\uc1a1", "\uc0ac\uc6a9\uc900\ube44", "\uc0ac\uc6a9", "\uad00\ub9ac", "\uad50\uccb4", "\uae30\ud0c0"]
+PRIMARY_PRODUCT_FILTERS = ["\ub0c9\uc7a5\uace0", "\uc138\ud0c1\uae30", "\uac74\uc870\uae30", "\uc2dd\uae30\uc138\ucc99\uae30", "\uccad\uc18c\uae30", "\uc624\ube10"]
+EXTRA_PRODUCT_FILTERS = ["\uc815\uc218\uae30", "\uc778\ub355\uc158", "\uc640\uc778\uc140\ub7ec", "\ucef5\uc138\ucc99\uae30", "\uc2e4\ub0b4\uc2dd\ubb3c\uc7ac\ubc30\uae30(\ud2d4\uc6b4)"]
+PRODUCT_ORDER = PRIMARY_PRODUCT_FILTERS + EXTRA_PRODUCT_FILTERS
+BRAND_FILTER_OPTIONS = ["LG", "Samsung", "GE", "Whirlpool"]
 FONT_CANDIDATES = [Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NanumGothic.ttf")]
 
 COL_COUNTRY = "국가"
@@ -56,7 +60,7 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
     latest_signature = _latest_signature()
     if CACHE_FILE.exists() and CACHE_META.exists():
         meta = json.loads(CACHE_META.read_text(encoding="utf-8"))
-        if meta.get("signature") == latest_signature:
+        if meta.get("signature") == latest_signature and meta.get("version") == CACHE_VERSION:
             return pd.read_pickle(CACHE_FILE)
 
     if CACHE_FILE.exists() and (not PROCESSED_DIR.exists() or not any(PROCESSED_DIR.iterdir())):
@@ -72,7 +76,11 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
         "persistent_issue_keywords": [],
         "quality_summary": [],
         "representative_comments": [],
+        "representative_bundles": [],
+        "opinion_units": [],
         "analysis_comments": [],
+        "monitoring_summary": [],
+        "reporting_summary": [],
     }
     run_dirs = sorted(
         (path for path in PROCESSED_DIR.iterdir() if path.is_dir()) if PROCESSED_DIR.exists() else [],
@@ -99,8 +107,12 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
             ("new_issue_keywords", "new_issue_keywords.parquet"),
             ("persistent_issue_keywords", "persistent_issue_keywords.parquet"),
             ("quality_summary", "quality_summary.parquet"),
-            ("representative_comments", "representative_comments.parquet"),
+("representative_comments", "representative_comments.parquet"),
+            ("representative_bundles", "representative_bundles.parquet"),
+            ("opinion_units", "opinion_units.parquet"),
             ("analysis_comments", "analysis_comments.parquet"),
+            ("monitoring_summary", "monitoring_summary.parquet"),
+            ("reporting_summary", "reporting_summary.parquet"),
         ]:
             frame = _read_frame(run_dir / filename)
             if frame.empty:
@@ -369,6 +381,63 @@ def localize_sentiment(value: str) -> str:
     return SENTIMENT_LABELS.get(str(value), str(value))
 
 
+def region_codes_from_labels(values: list[str]) -> list[str]:
+    selected = set(values or [])
+    return [code for code, label in REGION_LABELS.items() if label in selected or code in selected]
+
+
+BRAND_CANONICAL_MAP = {
+    "lg": "LG",
+    "l.g": "LG",
+    "\uc5d8\uc9c0": "LG",
+    "samsung": "Samsung",
+    "\uc0bc\uc131": "Samsung",
+    "ge": "GE",
+    "g.e": "GE",
+    "\uc9c0\uc774": "GE",
+    "general electric": "GE",
+    "whirlpool": "Whirlpool",
+    "\uc6d4\ud480": "Whirlpool",
+}
+
+CEJ_CANONICAL_MAP = {
+    "aware": "\uc778\uc9c0",
+    "explore": "\ud0d0\uc0c9",
+    "decide": "\uacb0\uc815",
+    "purchase": "\uad6c\ub9e4",
+    "deliver": "\ubc30\uc1a1",
+    "installation": "\ubc30\uc1a1",
+    "install": "\ubc30\uc1a1",
+    "on-board": "\uc0ac\uc6a9\uc900\ube44",
+    "onboard": "\uc0ac\uc6a9\uc900\ube44",
+    "use": "\uc0ac\uc6a9",
+    "maintain": "\uad00\ub9ac",
+    "replace": "\uad50\uccb4",
+    "other": "\uae30\ud0c0",
+    "\uc124\uce58": "\ubc30\uc1a1",
+    "\uad00\ub9ac\uad50\uccb4": "\uad00\ub9ac",
+}
+
+
+def canonicalize_brand(value: Any) -> str:
+    raw = _safe_text(value)
+    if not raw:
+        return "\ubbf8\uc5b8\uae09"
+    lowered = raw.lower()
+    if lowered in BRAND_CANONICAL_MAP:
+        return BRAND_CANONICAL_MAP[lowered]
+    return raw
+
+
+def canonicalize_cej(value: Any) -> str:
+    raw = _safe_text(value)
+    if not raw:
+        return "\uae30\ud0c0"
+    lowered = raw.lower()
+    if lowered in CEJ_CANONICAL_MAP:
+        return CEJ_CANONICAL_MAP[lowered]
+    return CEJ_CANONICAL_MAP.get(raw, raw if raw in CEJ_ORDER else "\uae30\ud0c0")
+
 
 def summarize_comment_reason(selected: pd.Series, sentiment_name: str) -> str:
     topic = str(selected.get(COL_CEJ, "\uae30\ud0c0") or "\uae30\ud0c0")
@@ -441,6 +510,15 @@ def _looks_garbled(text_value: str) -> bool:
 
 def _is_long_text(text_value: str, threshold: int = 260) -> bool:
     return len(_safe_text(text_value)) > threshold
+
+
+def _summarize_original_for_preview(text_value: str, limit: int = 220) -> str:
+    value = _safe_text(text_value)
+    if len(value) <= limit:
+        return value
+    compact = re.sub(r"\s+", " ", value).strip()
+    return compact[: limit - 3].rstrip() + "..."
+
 
 def _looks_korean_text(text_value: str) -> bool:
     value = _safe_text(text_value)
@@ -635,8 +713,8 @@ def add_localized_columns(comments_df: pd.DataFrame) -> pd.DataFrame:
     working[COL_SENTIMENT_CODE] = sentiment_bucket.fillna("neutral")
     working[COL_COUNTRY] = region_series.map(localize_region)
     working[COL_SENTIMENT] = working[COL_SENTIMENT_CODE].map(localize_sentiment)
-    working[COL_CEJ] = topic_series.fillna("\uae30\ud0c0")
-    working[COL_BRAND] = brand_series.fillna("\ubbf8\uc5b8\uae09")
+    working[COL_CEJ] = topic_series.map(canonicalize_cej)
+    working[COL_BRAND] = brand_series.map(canonicalize_brand)
     working[COL_WRITTEN_AT] = pd.to_datetime(published_series, errors="coerce", utc=True).dt.tz_localize(None)
     working[COL_WEEK_START] = working[COL_WRITTEN_AT].dt.to_period("W-SUN").dt.start_time
     working[COL_WEEK_LABEL] = working[COL_WEEK_START].dt.strftime("%Y-%m-%d")
@@ -673,12 +751,13 @@ def build_raw_download_package(filtered_comments: pd.DataFrame, filtered_videos:
 
 
 
-def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, quality_df: pd.DataFrame, filters: dict[str, Any]) -> dict[str, Any]:
+def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, quality_df: pd.DataFrame, filters: dict[str, Any], representative_bundles_df: pd.DataFrame | None = None, opinion_units_df: pd.DataFrame | None = None) -> dict[str, Any]:
     base_comments = comments_df.copy()
     products = filters.get("products") or []
     regions = filters.get("regions") or []
     sentiments = filters.get("sentiments") or []
     cej = filters.get("cej") or []
+    brands = filters.get("brands") or []
     keyword_query = str(filters.get("keyword_query") or "").strip()
 
     if products:
@@ -687,6 +766,8 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         base_comments = base_comments[base_comments[COL_COUNTRY].isin(regions)]
     if cej:
         base_comments = base_comments[base_comments[COL_CEJ].isin(cej)]
+    if brands:
+        base_comments = base_comments[base_comments[COL_BRAND].isin(brands)]
     if keyword_query:
         base_comments = base_comments[
             base_comments["cleaned_text"].fillna("").str.contains(keyword_query, case=False, na=False)
@@ -701,6 +782,26 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     valid_series = representative_comments.get("comment_validity", pd.Series("valid", index=representative_comments.index))
     representative_comments = representative_comments[valid_series.eq("valid")].copy()
 
+    representative_bundles = (representative_bundles_df.copy() if representative_bundles_df is not None else pd.DataFrame())
+    if not representative_bundles.empty:
+        if products and "product" in representative_bundles.columns:
+            representative_bundles = representative_bundles[representative_bundles["product"].isin(products)]
+        if regions and "region" in representative_bundles.columns:
+            representative_bundles = representative_bundles[representative_bundles["region"].isin(region_codes_from_labels(regions))]
+        if brands and "brand_mentioned" in representative_bundles.columns:
+            representative_bundles["brand_mentioned"] = representative_bundles["brand_mentioned"].map(canonicalize_brand)
+            representative_bundles = representative_bundles[representative_bundles["brand_mentioned"].isin(brands)]
+
+    opinion_units = (opinion_units_df.copy() if opinion_units_df is not None else pd.DataFrame())
+    if not opinion_units.empty:
+        if products and "product" in opinion_units.columns:
+            opinion_units = opinion_units[opinion_units["product"].isin(products)]
+        if regions and "region" in opinion_units.columns:
+            opinion_units = opinion_units[opinion_units["region"].isin(region_codes_from_labels(regions))]
+        if brands and "brand_mentioned" in opinion_units.columns:
+            opinion_units["brand_mentioned"] = opinion_units["brand_mentioned"].map(canonicalize_brand)
+            opinion_units = opinion_units[opinion_units["brand_mentioned"].isin(brands)]
+
     filtered_videos = videos_df.copy()
     if COL_COUNTRY not in filtered_videos.columns and "region" in filtered_videos.columns:
         filtered_videos[COL_COUNTRY] = filtered_videos["region"].map(localize_region)
@@ -708,6 +809,8 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         filtered_videos = filtered_videos[filtered_videos["product"].isin(products)]
     if regions and COL_COUNTRY in filtered_videos.columns:
         filtered_videos = filtered_videos[filtered_videos[COL_COUNTRY].isin(regions)]
+    if brands and COL_BRAND in filtered_videos.columns:
+        filtered_videos = filtered_videos[filtered_videos[COL_BRAND].isin(brands)]
 
     quality_filtered = quality_df.copy()
     if not quality_filtered.empty:
@@ -725,6 +828,8 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         "comments": filtered_comments,
         "representative_comments": representative_comments,
         "videos": filtered_videos,
+        "representative_bundles": representative_bundles,
+        "opinion_units": opinion_units,
         "removed_count": removed_count,
         "meaningful_count": meaningful_count,
     }
@@ -852,27 +957,239 @@ def render_issue_tables(data: dict[str, pd.DataFrame], selected_products: list[s
             st.dataframe(persistent_display[["\uc81c\ud488\uad70", COL_COUNTRY, "\ud0a4\uc6cc\ub4dc", "\uc5b8\uae09 \uc218", "\uc9c0\uc18d \uc8fc\ucc28 \uc218", "\ucd5c\uadfc \uc8fc\ucc28"]].head(15), use_container_width=True, hide_index=True)
 
 
-def render_representative_comments(filtered_comments: pd.DataFrame) -> None:
+def _representative_cluster_key(row: pd.Series) -> str:
+    cluster_id = row.get("cluster_id")
+    try:
+        if pd.notna(cluster_id):
+            return f"cluster::{cluster_id}"
+    except Exception:
+        pass
+    return "|".join([
+        _safe_text(row.get("sentiment_label", "")),
+        _safe_text(row.get("product", "")),
+        _safe_text(row.get(COL_CEJ, row.get("topic_label", ""))),
+        _safe_text(row.get("topic_label", "")) or _safe_text(row.get("classification_type", "")) or "general",
+    ])
+
+
+def _build_bundle_showcase(filtered_comments: pd.DataFrame, sentiment: str, limit: int = 5) -> pd.DataFrame:
+    candidate_pool = build_comment_showcase(filtered_comments, sentiment=sentiment, limit=120)
+    if candidate_pool.empty:
+        return candidate_pool
+
+    base_pool = filtered_comments.copy()
+    validity = base_pool.get("comment_validity", pd.Series("valid", index=base_pool.index))
+    base_pool = base_pool[validity.eq("valid")].copy()
+    if sentiment:
+        base_pool = base_pool[base_pool.get("sentiment_label", pd.Series("", index=base_pool.index)).eq(sentiment)].copy()
+    if base_pool.empty:
+        base_pool = candidate_pool.copy()
+
+    candidate_pool = candidate_pool.copy()
+    candidate_pool["_cluster_key"] = candidate_pool.apply(_representative_cluster_key, axis=1)
+    base_pool["_cluster_key"] = base_pool.apply(_representative_cluster_key, axis=1)
+
+    picked = []
+    seen = set()
+    for _, row in candidate_pool.iterrows():
+        cluster_key = row["_cluster_key"]
+        if cluster_key in seen:
+            continue
+        seen.add(cluster_key)
+        cluster_rows = base_pool[base_pool["_cluster_key"] == cluster_key].copy()
+        cluster_size = max(1, len(cluster_rows))
+        like_col = COL_LIKES if COL_LIKES in cluster_rows.columns else ("like_count" if "like_count" in cluster_rows.columns else None)
+        if like_col and "text_length" in cluster_rows.columns:
+            sample_rows = cluster_rows.sort_values([like_col, "text_length"], ascending=[False, False], na_position="last").head(5).copy()
+        elif like_col:
+            sample_rows = cluster_rows.sort_values([like_col], ascending=[False], na_position="last").head(5).copy()
+        else:
+            sample_rows = cluster_rows.head(5).copy()
+        sample_comments = []
+        for _, sample in sample_rows.iterrows():
+            sample_original = _safe_text(sample.get(COL_ORIGINAL, sample.get("text_display", sample.get("display_text", ""))))
+            sample_language = _safe_text(sample.get(COL_LANGUAGE, sample.get("language_detected", ""))).lower()
+            sample_is_korean = sample_language.startswith("ko") or _looks_korean_text(sample_original)
+            sample_translation = _resolve_card_translation(sample_original, _safe_text(sample.get(COL_TRANSLATION, sample.get("translated_text", ""))), sample_is_korean)
+            sample_comments.append({
+                "display_text": sample_original if sample_is_korean else sample_translation,
+                "original_text": sample_original,
+                "translated_text": "" if sample_is_korean else sample_translation,
+                "likes_count": int(pd.to_numeric(sample.get(COL_LIKES, sample.get("like_count", sample.get("likes_count", 0))), errors="coerce") or 0),
+                "pii_flag": _safe_text(sample.get("pii_flag", "N")) or "N",
+            })
+        bundle_row = row.copy()
+        bundle_row["cluster_size"] = cluster_size
+        bundle_row["sample_comments_json"] = json.dumps(sample_comments, ensure_ascii=False)
+        likes_value = int(pd.to_numeric(bundle_row.get(COL_LIKES, bundle_row.get("like_count", bundle_row.get("top_likes_count", 0))), errors="coerce") or 0)
+        likes_text = f", 좋아요 {likes_value:,}개" if likes_value > 0 else ""
+        bundle_row["selection_reason_ui"] = f"유사 의견 {cluster_size}개가 같은 이슈를 반복 언급했고, 감성 강도와 내용 구체성{likes_text}을 기준으로 대표 코멘트로 선정했습니다."
+        picked.append(bundle_row)
+        if len(picked) >= limit:
+            break
+
+    if not picked:
+        return pd.DataFrame(columns=candidate_pool.columns)
+    return pd.DataFrame(picked)
+
+
+def _rows_from_representative_bundles(bundle_df: pd.DataFrame, sentiment: str, limit: int = 5) -> pd.DataFrame:
+    if bundle_df is None or bundle_df.empty:
+        return pd.DataFrame()
+    working = bundle_df.copy()
+    if sentiment and "sentiment_code" in working.columns:
+        working = working[working["sentiment_code"].eq(sentiment)].copy()
+    if working.empty:
+        return pd.DataFrame()
+    if "rank" in working.columns:
+        working = working.sort_values(["rank", "bundle_score"], ascending=[True, False], na_position="last")
+    else:
+        working = working.sort_values(["bundle_score", "cluster_size"], ascending=[False, False], na_position="last")
+
+    rows: list[pd.Series] = []
+    for _, row in working.head(limit).iterrows():
+        converted = pd.Series(dtype=object)
+        converted["topic_label"] = _safe_text(row.get("aspect_key", "")) or "대표 코멘트"
+        converted["cluster_size"] = int(pd.to_numeric(row.get("cluster_size", 1), errors="coerce") or 1)
+        converted[COL_LIKES] = int(pd.to_numeric(row.get("top_likes_count", 0), errors="coerce") or 0)
+        converted["product"] = _safe_text(row.get("product", row.get("product_category", "-")))
+        scene_raw = _safe_text(row.get("cej_scene_code", row.get(COL_CEJ, "기타")))
+        scene_map = {
+            "S1 Aware": "인지", "S2 Explore": "탐색", "S3 Decide": "결정", "S4 Purchase": "구매",
+            "S5 Deliver": "배송", "S6 On-board": "사용준비", "S7 Use": "사용", "S8 Maintain": "관리",
+            "S9 Replace": "교체", "S10 Other": "기타",
+        }
+        converted[COL_CEJ] = scene_map.get(scene_raw, canonicalize_cej(scene_raw))
+        converted[COL_BRAND] = canonicalize_brand(_safe_text(row.get("brand_mentioned", "")))
+        converted[COL_VIDEO_TITLE] = _safe_text(row.get(COL_VIDEO_TITLE, row.get("top_video_title", "관련 영상"))) or "관련 영상"
+        converted[COL_VIDEO_LINK] = _safe_text(row.get("top_source_link", row.get(COL_VIDEO_LINK, "#"))) or "#"
+        converted[COL_ORIGINAL] = _safe_text(row.get("top_display_text", row.get("top_original_text", "")))
+        converted[COL_RAW] = _safe_text(row.get("top_original_text", converted[COL_ORIGINAL]))
+        converted[COL_TRANSLATION] = _safe_text(row.get("top_translation_text", ""))
+        converted[COL_LANGUAGE] = "ko" if _looks_korean_text(converted[COL_ORIGINAL]) else "en"
+        selection_reason_raw = _safe_text(row.get("selection_reason", ""))
+        if not selection_reason_raw or _looks_garbled(selection_reason_raw):
+            selection_reason_raw = f"유사 의견 {converted['cluster_size']}개가 같은 이슈를 반복 언급했고, 감성 강도와 내용 구체성을 기준으로 대표 코멘트로 선정했습니다."
+        converted["selection_reason_ui"] = selection_reason_raw
+        converted["sample_comments_json"] = _safe_text(row.get("sample_comments_json", "[]")) or "[]"
+        converted["pii_flag"] = _safe_text(row.get("top_pii_flag", "N")) or "N"
+        converted["pii_types"] = _safe_text(row.get("top_pii_types", ""))
+        converted["pii_raw_text"] = _safe_text(row.get("pii_raw_text", ""))
+        converted["voc_items_json"] = _safe_text(row.get("voc_items_json", "[]"))
+        rows.append(converted)
+    return pd.DataFrame(rows)
+
+
+def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None) -> None:
     st.subheader("실제 고객 코멘트 샘플")
-    st.caption("감성 강도, 좋아요 수, 문장 길이를 함께 반영해 대표성이 높은 코멘트를 우선 보여줍니다.")
-    st.caption("Representative comments are prioritized based on sentiment strength, number of likes, and content richness (comment length).")
-    negative_showcase = build_comment_showcase(filtered_comments, sentiment="negative", limit=8)
-    positive_showcase = build_comment_showcase(filtered_comments, sentiment="positive", limit=8)
+    st.caption("감성 강도, 좋아요 수, 문장 길이를 함께 반영하되, 유사 이슈는 묶음으로 정리해 대표성을 보여줍니다.")
+    negative_showcase = _rows_from_representative_bundles(representative_bundles, sentiment="negative", limit=5)
+    positive_showcase = _rows_from_representative_bundles(representative_bundles, sentiment="positive", limit=5)
+    if negative_showcase.empty:
+        negative_showcase = _build_bundle_showcase(filtered_comments, sentiment="negative", limit=5)
+    if positive_showcase.empty:
+        positive_showcase = _build_bundle_showcase(filtered_comments, sentiment="positive", limit=5)
 
     if negative_showcase.empty and positive_showcase.empty:
-        fallback_showcase = build_comment_showcase(filtered_comments, sentiment="", limit=6)
+        fallback_showcase = _build_bundle_showcase(filtered_comments, sentiment="", limit=5)
         st.warning("현재 조건에서 강한 긍정/부정 대표 코멘트가 부족해, 의미 있는 유효 댓글을 우선 보여줍니다.")
-        render_comment_table(fallback_showcase, key_prefix="neutral")
+        render_comment_table(fallback_showcase, key_prefix="neutral", source_comments=opinion_units if opinion_units is not None and not opinion_units.empty else filtered_comments)
         return
 
     st.write(f"부정 대표 코멘트 {len(negative_showcase)}건")
-    render_comment_table(negative_showcase, key_prefix="negative")
+    render_comment_table(negative_showcase, key_prefix="negative", source_comments=opinion_units if opinion_units is not None and not opinion_units.empty else filtered_comments)
 
     st.write(f"긍정 대표 코멘트 {len(positive_showcase)}건")
-    render_comment_table(positive_showcase, key_prefix="positive")
+    render_comment_table(positive_showcase, key_prefix="positive", source_comments=opinion_units if opinion_units is not None and not opinion_units.empty else filtered_comments)
 
 
-def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str) -> None:
+def _collect_similar_comments_for_download(source_comments: pd.DataFrame, selected: pd.Series, sentiment_name: str) -> pd.DataFrame:
+    if source_comments is None or source_comments.empty:
+        return pd.DataFrame()
+    working = source_comments.copy()
+
+    if sentiment_name in {"negative", "positive", "neutral"}:
+        if "sentiment_code" in working.columns:
+            working = working[working["sentiment_code"].astype(str).eq(sentiment_name)].copy()
+        else:
+            sentiment_series = working.get("sentiment_label", pd.Series("", index=working.index))
+            working = working[sentiment_series.astype(str).eq(sentiment_name)].copy()
+
+    topic_value = _safe_text(selected.get("topic_label", "")) or _safe_text(selected.get("aspect_key", ""))
+    if topic_value:
+        if "aspect_key" in working.columns:
+            working = working[working["aspect_key"].astype(str).eq(topic_value)].copy()
+        elif "topic_label" in working.columns:
+            working = working[working["topic_label"].astype(str).eq(topic_value)].copy()
+
+    product_value = _safe_text(selected.get("product", ""))
+    if product_value and "product" in working.columns:
+        working = working[working["product"].astype(str).eq(product_value)].copy()
+
+    cej_value = _safe_text(selected.get(COL_CEJ, ""))
+    if cej_value:
+        scene_map = {
+            "인지": "S1 Aware",
+            "탐색": "S2 Explore",
+            "결정": "S3 Decide",
+            "구매": "S4 Purchase",
+            "배송": "S5 Deliver",
+            "사용준비": "S6 On-board",
+            "사용": "S7 Use",
+            "관리": "S8 Maintain",
+            "교체": "S9 Replace",
+            "기타": "S10 Other",
+        }
+        if "cej_scene_code" in working.columns:
+            working = working[working["cej_scene_code"].astype(str).eq(scene_map.get(cej_value, cej_value))].copy()
+        elif COL_CEJ in working.columns:
+            working = working[working[COL_CEJ].astype(str).eq(cej_value)].copy()
+
+    brand_value = _safe_text(selected.get(COL_BRAND, ""))
+    if brand_value:
+        if "brand_mentioned" in working.columns:
+            working = working[working["brand_mentioned"].map(canonicalize_brand).astype(str).eq(brand_value)].copy()
+        elif COL_BRAND in working.columns:
+            working = working[working[COL_BRAND].astype(str).eq(brand_value)].copy()
+
+    if working.empty:
+        return working
+
+    display_rows = []
+    like_col = COL_LIKES if COL_LIKES in working.columns else ("likes_count" if "likes_count" in working.columns else "like_count")
+    if like_col not in working.columns:
+        like_col = None
+
+    sort_working = working.sort_values([like_col], ascending=[False], na_position="last") if like_col else working.copy()
+
+    for _, sample in sort_working.iterrows():
+        sample_original = _safe_text(sample.get(COL_ORIGINAL, sample.get("original_text", sample.get("display_text", sample.get("text_display", sample.get("opinion_text", ""))))))
+        sample_language = _safe_text(sample.get(COL_LANGUAGE, sample.get("language_detected", ""))).lower()
+        sample_is_korean = sample_language.startswith("ko") or _looks_korean_text(sample_original)
+        sample_translation = _resolve_card_translation(sample_original, _safe_text(sample.get(COL_TRANSLATION, sample.get("translated_text", ""))), sample_is_korean)
+        display_rows.append({
+            "원문": sample_original,
+            "번역": "" if sample_is_korean else sample_translation,
+            "표시본문": sample_original if sample_is_korean else (sample_translation or sample_original),
+            "좋아요 수": int(pd.to_numeric(sample.get(COL_LIKES, sample.get("likes_count", sample.get("like_count", 0))), errors="coerce") or 0),
+            "PII": "있음" if _safe_text(sample.get("pii_flag", "N")) == "Y" else "없음",
+        })
+    return pd.DataFrame(display_rows)
+
+
+def _localized_video_title(title: str) -> str:
+    clean = _safe_text(title)
+    if not clean:
+        return "?? ??"
+    if _looks_korean_text(clean):
+        return clean
+    translated = _safe_text(translate_to_korean(clean))
+    if translated and not _looks_garbled(translated) and translated != clean:
+        return translated
+    return clean
+
+
+def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source_comments: pd.DataFrame | None = None) -> None:
     if key_prefix == "negative":
         sentiment_name = "negative"
     elif key_prefix == "positive":
@@ -887,13 +1204,12 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str) -> Non
     top_rows = comment_showcase.reset_index(drop=True)
     for idx, selected in top_rows.iterrows():
         with st.container(border=True):
-            st.markdown(f"#### 대표 코멘트 {idx + 1}")
+            aspect_label = _safe_text(selected.get("topic_label", "")) or _safe_text(selected.get("aspect_key", "")) or f"대표 코멘트 {idx + 1}"
+            st.markdown(f"#### {idx + 1}. {aspect_label}")
             likes_value = pd.to_numeric(selected.get(COL_LIKES, 0), errors="coerce")
             likes = 0 if pd.isna(likes_value) else int(likes_value)
-            st.caption(
-                f"제품군: {_safe_text(selected.get('product', '-')) or '-'} · {COL_COUNTRY}: {_safe_text(selected.get(COL_COUNTRY, '-')) or '-'} · "
-                f"{COL_CEJ}: {_safe_text(selected.get(COL_CEJ, '-')) or '-'} · {COL_BRAND}: {_safe_text(selected.get(COL_BRAND, '-')) or '-'} · 좋아요 수: {likes:,}"
-            )
+            cluster_size = int(pd.to_numeric(selected.get("cluster_size", 1), errors="coerce") or 1)
+            st.caption(f"유사 의견 {cluster_size}개 · 제품군: {_safe_text(selected.get('product', '-')) or '-'} · {COL_CEJ}: {_safe_text(selected.get(COL_CEJ, '-')) or '-'} · {COL_BRAND}: {_safe_text(selected.get(COL_BRAND, '-')) or '-'} · 좋아요 수: {likes:,}")
 
             video_title = _safe_text(selected.get(COL_VIDEO_TITLE, '-')) or '-'
             video_link = _safe_text(selected.get(COL_VIDEO_LINK, '#')) or '#'
@@ -907,60 +1223,51 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str) -> Non
             translation = _resolve_card_translation(original_text, raw_translation, is_korean)
             working_selected[COL_TRANSLATION] = translation
 
-            display_reason = _safe_text(working_selected.get("display_reason", ""))
-            if not display_reason or _looks_garbled(display_reason):
-                display_reason = summarize_comment_reason(working_selected, sentiment_name)
-            st.markdown(f'<div class="voc-reason">{display_reason}</div>', unsafe_allow_html=True)
+            selection_reason = _safe_text(working_selected.get("selection_reason_ui", ""))
+            if not selection_reason:
+                selection_reason = f"유사 의견 {cluster_size}개가 같은 이슈를 반복 언급해 대표성이 높습니다."
+            st.markdown("**선정 이유**")
+            st.markdown(f'<div class="voc-reason">{selection_reason}</div>', unsafe_allow_html=True)
 
-            decision_label, decision_help = _decision_badge(_safe_text(working_selected.get("representative_decision", "review_needed")) or "review_needed")
-            rep_score = pd.to_numeric(working_selected.get("representative_score", 0), errors="coerce")
-            rep_score_text = "-" if pd.isna(rep_score) or rep_score <= 0 else f"{int(rep_score)}/30"
-            st.caption(f"{decision_label} · 대표성 점수 {rep_score_text}")
-            rep_reason = _safe_text(working_selected.get("representative_reason", ""))
-            if not rep_reason or _looks_garbled(rep_reason):
-                rep_reason = decision_help
-            st.write(rep_reason)
-
-            st.markdown("**요약**")
+            st.markdown("**AI 요약(참고)**")
             st.write(_summarize_for_dashboard(working_selected, sentiment_name))
 
             voc_items = _extract_voc_items(working_selected, sentiment_name)
             if voc_items:
-                st.markdown("**추출된 VoC 항목**")
+                st.markdown("**추출 키워드/VoC(참고)**")
                 for item in voc_items:
                     evidence = _safe_text(item.get("evidence_span", "")) or "근거 문구를 다시 확인 중입니다."
-                    st.markdown(f"- `{item['sentiment']}` · **{item['topic']}**: {item['insight']}")
+                    st.markdown(f"- {item['sentiment']} · **{item['topic']}**: {item['insight']}")
                     st.caption(f"근거: {evidence}")
 
-            context_text = _safe_text(working_selected.get(COL_CONTEXT, ""))
-            context_translation = _safe_text(working_selected.get(COL_CONTEXT_TRANSLATION, context_text)) or context_text
-            if context_text and (not _looks_korean_text(context_text)) and (not context_translation or context_translation == context_text or _looks_garbled(context_translation)):
-                translated_context = _safe_text(translate_to_korean(context_text))
-                if translated_context and translated_context != context_text and _looks_korean_text(translated_context):
-                    context_translation = translated_context
-            if context_text and bool(working_selected.get("display_context_required", False)):
-                st.markdown("**연관 맥락**")
-                if context_translation and context_translation != context_text and _looks_korean_text(context_translation):
-                    st.write(context_translation)
-                    with st.expander("연관 원문 보기"):
-                        st.write(context_text)
-                else:
-                    st.write(context_text)
+            primary_label = "원문(Original)" if is_korean else "번역(참고)"
+            primary_text = original_text if is_korean else (translation or "한국어 번역을 준비 중입니다.")
+            st.markdown(f"**{primary_label}**")
+            st.write(_summarize_original_for_preview(primary_text))
 
-            if is_korean:
-                if _is_long_text(original_text):
-                    with st.expander("원문 댓글 더보기"):
-                        st.markdown(f"**{COL_ORIGINAL}**")
-                        st.write(original_text)
-                else:
-                    st.markdown(f"**{COL_ORIGINAL}**")
+            if _is_long_text(primary_text):
+                with st.expander("원문 전체 보기" if is_korean else "번역 전체 보기"):
+                    st.write(primary_text)
+
+            if not is_korean:
+                with st.expander("원문(Original) 보기"):
                     st.write(original_text)
-            else:
-                with st.expander("번역/원문 더보기"):
-                    st.markdown(f"**{COL_TRANSLATION}**")
-                    st.write(translation)
-                    st.markdown(f"**{COL_ORIGINAL}**")
-                    st.write(original_text)
+
+            sample_comments = []
+            try:
+                sample_comments = json.loads(_safe_text(selected.get("sample_comments_json", "[]")) or "[]")
+            except Exception:
+                sample_comments = []
+            if sample_comments:
+                with st.expander("유사 코멘트 보기"):
+                    for sample in sample_comments:
+                        st.markdown(f"- {_safe_text(sample.get('display_text', ''))}")
+                        sample_translation = _safe_text(sample.get('translated_text', ''))
+                        if sample_translation:
+                            st.caption(f"번역(참고): {sample_translation}")
+                        st.caption(f"좋아요 {int(sample.get('likes_count', 0) or 0):,} · PII {'있음' if _safe_text(sample.get('pii_flag', 'N')) == 'Y' else '없음'}")
+
+
 
 
 def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> pd.DataFrame:
@@ -1122,12 +1429,12 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
 
     with st.container(border=True):
         st.markdown("#### 대표 코멘트")
-        neg = build_comment_showcase(video_comments, sentiment="negative", limit=3)
-        pos = build_comment_showcase(video_comments, sentiment="positive", limit=3)
+        neg = _build_bundle_showcase(video_comments, sentiment="negative", limit=5)
+        pos = _build_bundle_showcase(video_comments, sentiment="positive", limit=5)
         st.markdown(f"##### 부정 대표 코멘트 {len(neg)}건")
-        render_comment_table(neg, key_prefix="negative")
+        render_comment_table(neg, key_prefix="negative", source_comments=video_comments)
         st.markdown(f"##### 긍정 대표 코멘트 {len(pos)}건")
-        render_comment_table(pos, key_prefix="positive")
+        render_comment_table(pos, key_prefix="positive", source_comments=video_comments)
 
     with st.container(border=True):
         st.markdown("#### 전체 댓글 목록")
@@ -1162,29 +1469,38 @@ def main() -> None:
 
     videos_df = data["videos"].copy()
     videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
-    products = [value for value in PRODUCT_ORDER if value in comments_df["product"].astype(str).unique().tolist()]
-    regions = [value for value in [localize_region("KR"), localize_region("US")] if value in comments_df[COL_COUNTRY].astype(str).unique().tolist()]
-    sentiments = [value for value in [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")] if value in comments_df[COL_SENTIMENT].astype(str).unique().tolist()]
-    cej_labels = [value for value in CEJ_ORDER if value in comments_df[COL_CEJ].astype(str).unique().tolist()]
+    products = PRODUCT_ORDER
+    primary_products = PRIMARY_PRODUCT_FILTERS
+    extra_products = EXTRA_PRODUCT_FILTERS
+    regions = [localize_region("KR"), localize_region("US")]
+    sentiments = [localize_sentiment("positive"), localize_sentiment("negative"), localize_sentiment("neutral"), localize_sentiment("excluded")]
+    cej_labels = CEJ_ORDER
+    brands = BRAND_FILTER_OPTIONS
 
     st.markdown("## 가전 VoC Dashboard")
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
-    st.caption("Build: 2026-03-22 23:25 / representative-header-render-fix-2")
+    st.caption("Build: 2026-03-26 03:20 / representative-label-fix-4")
 
     with st.sidebar:
-        st.markdown("### 탐색 필터")
-        selected_products = st.multiselect("제품군", products, default=products)
-        selected_regions = st.multiselect("국가", regions, default=regions)
-        selected_sentiments = st.multiselect("감성", sentiments, default=sentiments)
-        selected_cej = st.multiselect("고객경험여정 단계", cej_labels, default=cej_labels)
-        keyword_query = st.text_input("댓글 내 키워드 검색", "")
-        weeks_per_view = st.slider("차트 한 화면 주차 수", min_value=4, max_value=24, value=12, step=2)
+        st.markdown("### \ud0d0\uc0c9 \ud544\ud130")
+        selected_primary_products = st.multiselect("\uc81c\ud488\uad70", primary_products, default=primary_products)
+        with st.expander("\uc81c\ud488\uad70 \ub354\ubcf4\uae30"):
+            selected_extra_products = st.multiselect("\ucd94\uac00 \uc81c\ud488\uad70", extra_products, default=extra_products, label_visibility="collapsed")
+        selected_products = [item for item in products if item in set(selected_primary_products + selected_extra_products)]
+        selected_regions = st.multiselect("\uad6d\uac00", regions, default=regions)
+        selected_sentiments = st.multiselect("\uac10\uc131", sentiments, default=sentiments)
+        selected_cej = st.multiselect("\uace0\uac1d\uacbd\ud5d8\uc5ec\uc815 \ub2e8\uacc4", cej_labels, default=cej_labels)
+        selected_brands = st.multiselect("\ube0c\ub79c\ub4dc", brands, default=brands)
+        keyword_query = st.text_input("\ub313\uae00 \ub0b4 \ud0a4\uc6cc\ub4dc \uac80\uc0c9", "")
+        weeks_per_view = st.slider("\ucc28\ud2b8 \ud55c \ud654\uba74 \uc8fc\ucc28 \uc218", min_value=4, max_value=24, value=12, step=2)
 
     bundle = compute_filtered_bundle(
         comments_df,
         videos_df,
         data["quality_summary"],
-        {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "keyword_query": keyword_query},
+        {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
+        data.get("representative_bundles", pd.DataFrame()),
+        data.get("opinion_units", pd.DataFrame()),
     )
     filtered_comments = bundle["comments"]
     filtered_videos = bundle["videos"]
@@ -1210,6 +1526,9 @@ def main() -> None:
             brand_df = brand_df[brand_df["product"].isin(selected_products)]
         if selected_regions:
             brand_df = brand_df[brand_df[COL_COUNTRY].isin(selected_regions)]
+        if selected_brands and COL_BRAND in brand_df.columns:
+            brand_df[COL_BRAND] = brand_df[COL_BRAND].map(canonicalize_brand)
+            brand_df = brand_df[brand_df[COL_BRAND].isin(selected_brands)]
 
     density_df = data["negative_density"].copy()
     if not density_df.empty:
@@ -1224,6 +1543,59 @@ def main() -> None:
     positive_ratio = 0.0 if valid_base.empty else (valid_base["sentiment_label"].eq("positive").mean() * 100)
     negative_ratio = 0.0 if valid_base.empty else (valid_base["sentiment_label"].eq("negative").mean() * 100)
     neutral_ratio = 0.0 if valid_base.empty else (valid_base["sentiment_label"].eq("neutral").mean() * 100)
+
+    monitoring_df = data.get("monitoring_summary", pd.DataFrame()).copy()
+    reporting_df = data.get("reporting_summary", pd.DataFrame()).copy()
+    if not monitoring_df.empty:
+        if selected_products and "product" in monitoring_df.columns:
+            monitoring_df = monitoring_df[monitoring_df["product"].isin(selected_products)]
+        if selected_regions and "region" in monitoring_df.columns:
+            region_codes = region_codes_from_labels(selected_regions)
+            monitoring_df = monitoring_df[monitoring_df["region"].isin(region_codes)]
+    if not reporting_df.empty:
+        if selected_products and "product" in reporting_df.columns:
+            reporting_df = reporting_df[reporting_df["product"].isin(selected_products)]
+        if selected_regions and "region" in reporting_df.columns:
+            region_codes = region_codes_from_labels(selected_regions)
+            reporting_df = reporting_df[reporting_df["region"].isin(region_codes)]
+    if not filtered_comments.empty:
+        if "comment_id" in filtered_comments.columns:
+            comment_ids = filtered_comments["comment_id"].astype("string").fillna("")
+            direct_source_count = float(comment_ids.replace("", pd.NA).dropna().nunique())
+        else:
+            direct_source_count = float(len(filtered_comments))
+    else:
+        direct_source_count = 0.0
+    direct_opinion_count = float(len(filtered_comments))
+    direct_neutral_count = float(filtered_comments.get("sentiment_label", pd.Series("", index=filtered_comments.index)).eq("neutral").sum()) if not filtered_comments.empty else 0.0
+    direct_exclude_count = float(filtered_comments.get("comment_validity", pd.Series("valid", index=filtered_comments.index)).eq("excluded").sum()) if not filtered_comments.empty else 0.0
+    direct_valid = filtered_comments[filtered_comments.get("comment_validity", pd.Series("valid", index=filtered_comments.index)).eq("valid")].copy() if not filtered_comments.empty else pd.DataFrame()
+    direct_positive_count = float(direct_valid.get("sentiment_label", pd.Series("", index=direct_valid.index)).eq("positive").sum()) if not direct_valid.empty else 0.0
+    direct_negative_count = float(direct_valid.get("sentiment_label", pd.Series("", index=direct_valid.index)).eq("negative").sum()) if not direct_valid.empty else 0.0
+    direct_kpi_count = direct_positive_count + direct_negative_count
+
+    monitoring_row = pd.Series({
+        "source_count": direct_source_count,
+        "opinion_count": direct_opinion_count,
+        "neutral_opinion_count": direct_neutral_count,
+        "exclude_opinion_count": direct_exclude_count,
+        "split_source_count": max(0.0, direct_opinion_count - direct_source_count),
+    })
+    source_count_val = direct_source_count
+    opinion_count_val = direct_opinion_count
+    split_sources = max(0.0, direct_opinion_count - direct_source_count)
+    monitoring_row["split_rate"] = (split_sources / source_count_val) if source_count_val else 0.0
+    monitoring_row["neutral_rate"] = (direct_neutral_count / opinion_count_val) if opinion_count_val else 0.0
+    monitoring_row["exclude_rate"] = (direct_exclude_count / opinion_count_val) if opinion_count_val else 0.0
+
+    reporting_row = pd.Series({
+        "kpi_opinion_count": direct_kpi_count,
+        "positive_count": direct_positive_count,
+        "negative_count": direct_negative_count,
+    })
+    kpi_count_val = direct_kpi_count
+    reporting_row["positive_share"] = (direct_positive_count / kpi_count_val) if kpi_count_val else 0.0
+    reporting_row["negative_share"] = (direct_negative_count / kpi_count_val) if kpi_count_val else 0.0
 
     raw_comments_export = filtered_comments.rename(columns={
         "text_display": COL_ORIGINAL,
@@ -1259,11 +1631,31 @@ def main() -> None:
 
         row2_col1, row2_col2, row2_col3 = st.columns(3)
         with row2_col1:
-            render_card("긍정 응답률", f"{positive_ratio:.1f}%")
+            render_card("\uae0d\uc815 \ube44\uc728", f"{positive_ratio:.1f}%")
         with row2_col2:
-            render_card("부정 응답률", f"{negative_ratio:.1f}%")
+            render_card("\ubd80\uc815 \ube44\uc728", f"{negative_ratio:.1f}%")
         with row2_col3:
-            render_card("중립 응답률", f"{neutral_ratio:.1f}%")
+            render_card("\uc911\ub9bd \ube44\uc728", f"{neutral_ratio:.1f}%")
+
+        row3_col1, row3_col2, row3_col3, row3_col4, row3_col5 = st.columns(5)
+        with row3_col1:
+            render_card("\uc6d0\ucc9c \ucf58\ud150\uce20 \uc218", f"{int(monitoring_row.get('source_count', 0) or 0):,}")
+        with row3_col2:
+            render_card("\uc758\uacac \ub2e8\uc704 \uc218", f"{int(monitoring_row.get('opinion_count', 0) or 0):,}")
+        with row3_col3:
+            render_card("\ubd84\ub9ac \ube44\uc728", f"{float(monitoring_row.get('split_rate', 0) or 0):.1%}")
+        with row3_col4:
+            render_card("\uc911\ub9bd \ube44\uc728", f"{float(monitoring_row.get('neutral_rate', 0) or 0):.1%}")
+        with row3_col5:
+            render_card("\uc81c\uc678 \ube44\uc728", f"{float(monitoring_row.get('exclude_rate', 0) or 0):.1%}")
+
+        row4_col1, row4_col2, row4_col3 = st.columns(3)
+        with row4_col1:
+            render_card("KPI \uc758\uacac \uc218", f"{int(reporting_row.get('kpi_opinion_count', 0) or 0):,}")
+        with row4_col2:
+            render_card("KPI \uae0d\uc815 \ube44\uc728", f"{float(reporting_row.get('positive_share', 0) or 0):.1%}")
+        with row4_col3:
+            render_card("KPI \ubd80\uc815 \ube44\uc728", f"{float(reporting_row.get('negative_share', 0) or 0):.1%}")
 
         with st.container(border=True):
             st.markdown("### 주차별 긍정/부정 응답률")
@@ -1342,7 +1734,7 @@ def main() -> None:
 
 
         with st.container(border=True):
-            render_representative_comments(bundle.get("representative_comments", filtered_comments))
+            render_representative_comments(bundle.get("representative_comments", filtered_comments), bundle.get("representative_bundles", pd.DataFrame()), bundle.get("opinion_units", pd.DataFrame()))
 
     with tab_videos:
         render_video_summary_page(filtered_comments, filtered_videos, density_df)
