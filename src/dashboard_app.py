@@ -723,6 +723,8 @@ def _build_selection_narrative(selected: pd.Series, source_comments: pd.DataFram
     original_text = _safe_text(selected.get(COL_RAW, selected.get(COL_ORIGINAL, "")))
     summary_text = _summarize_for_dashboard(selected, sentiment_name)
     similar_comments = _collect_similar_comments_for_download(source_comments if source_comments is not None else pd.DataFrame(), selected, sentiment_name)
+    if similar_comments.empty:
+        similar_comments = _collect_similar_comments_from_samples(selected)
     trend_text = _recent_trend_detail(similar_comments)
     strength_text = _score_signal_detail(original_text, sentiment_name, _safe_text(selected.get("signal_strength", "")))
     richness_text = _score_richness_detail(original_text)
@@ -1580,6 +1582,30 @@ def _collect_similar_comments_for_download(source_comments: pd.DataFrame, select
     return pd.DataFrame(display_rows)
 
 
+def _collect_similar_comments_from_samples(selected: pd.Series) -> pd.DataFrame:
+    try:
+        sample_items = json.loads(_safe_text(selected.get("sample_comments_json", "[]")) or "[]")
+    except Exception:
+        sample_items = []
+    rows = []
+    seen = set()
+    for idx, item in enumerate(sample_items):
+        original_text = _safe_text(item.get("original_text", item.get("display_text", "")))
+        translated_text = _safe_text(item.get("translated_text", ""))
+        unique_id = _safe_text(item.get("opinion_id", item.get("comment_id", ""))) or original_text or f"sample_{idx}"
+        if not original_text or unique_id in seen:
+            continue
+        seen.add(unique_id)
+        rows.append({
+            "comment_id": unique_id,
+            "??": original_text,
+            "??(??)": translated_text,
+            "??? ?": int(pd.to_numeric(item.get("likes_count", 0), errors="coerce") or 0),
+            "PII": "??" if _safe_text(item.get("pii_flag", "N")) == "Y" else "??",
+            "????": _safe_text(item.get("written_at", "")),
+        })
+    return pd.DataFrame(rows)
+
 def _localized_video_title(title: str) -> str:
     clean = _safe_text(title)
     if not clean:
@@ -1660,23 +1686,32 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 with st.expander("원문(Original) 보기"):
                     st.write(original_text)
 
-            similar_comments = _collect_similar_comments_for_download(source_comments if source_comments is not None else pd.DataFrame(), selected, sentiment_name)
+            similar_comments = _collect_similar_comments_for_download(
+                source_comments if source_comments is not None else pd.DataFrame(),
+                selected,
+                sentiment_name,
+            )
+            if similar_comments.empty:
+                similar_comments = _collect_similar_comments_from_samples(selected)
             if not similar_comments.empty:
-                with st.expander("유사 코멘트 보기"):
+                with st.expander("?? ??? ??"):
                     preview_rows = similar_comments.head(5)
                     for _, sample in preview_rows.iterrows():
-                        st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
-                        sample_translation = _safe_text(sample.get('번역(참고)', ''))
+                        st.markdown(f"- {_safe_text(sample.get('??', ''))}")
+                        sample_translation = _safe_text(sample.get('??(??)', ''))
                         if sample_translation:
-                            st.caption(f"번역(참고): {sample_translation}")
-                        meta_bits = [f"좋아요 {_safe_text(sample.get('좋아요 수', 0))}", f"PII {_safe_text(sample.get('PII', '없음'))}"]
-                        written_at = _safe_text(sample.get('작성일시', ''))
+                            st.caption(f"??(??): {sample_translation}")
+                        meta_bits = [
+                            f"??? {_safe_text(sample.get('??? ?', 0))}",
+                            f"PII {_safe_text(sample.get('PII', '??'))}",
+                        ]
+                        written_at = _safe_text(sample.get('????', ''))
                         if written_at:
                             meta_bits.append(str(written_at))
-                        st.caption(" · ".join(meta_bits))
+                        st.caption(" ? ".join(meta_bits))
                     csv_bytes = similar_comments.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                     st.download_button(
-                        label="전체 유사 코멘트 다운로드",
+                        label="?? ?? ??? ????",
                         data=csv_bytes,
                         file_name=f"similar_comments_{key_prefix}_{idx + 1}.csv",
                         mime="text/csv",
@@ -2009,7 +2044,7 @@ def main() -> None:
 
     st.markdown("## 가전 VoC Dashboard")
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
-    st.caption("Build: 2026-03-27 07:10 / representative-video-visibility-pass-3")
+    st.caption("Build: 2026-03-27 08:15 / representative-video-restore-pass-2")
     default_products = available_products
     default_regions = regions
     default_brands = [item for item in brands if item in comments_df.get(COL_BRAND, pd.Series(dtype=str)).dropna().astype(str).unique().tolist()] or brands
