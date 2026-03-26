@@ -2028,108 +2028,108 @@ def main() -> None:
     filter_sentiment_defaults = _normalize_pill_state("filter_sentiments", sentiments, default_sentiments)
     filter_cej_defaults = _normalize_pill_state("filter_cej", cej_labels, default_cej)
 
-with st.sidebar:
-    st.markdown("### 탐색 필터")
+    with st.sidebar:
+        st.markdown("### 탐색 필터")
 
-    with st.container(border=True):
-        st.caption("제품 범위")
-        st.caption(f"현재 분석 데이터가 있는 제품군: {', '.join(available_products)}")
-        selected_products = st.pills(
-            "제품군",
-            products,
-            selection_mode="multi",
-            key="filter_products",
-            label_visibility="collapsed",
-            width="content",
-        ) or filter_product_defaults
+        with st.container(border=True):
+            st.caption("제품 범위")
+            st.caption(f"현재 분석 데이터가 있는 제품군: {', '.join(available_products)}")
+            selected_products = st.pills(
+                "제품군",
+                products,
+                selection_mode="multi",
+                key="filter_products",
+                label_visibility="collapsed",
+                width="content",
+            ) or filter_product_defaults
 
-    with st.container(border=True):
-        st.caption("시장")
-        selected_regions = st.pills(
-            "국가",
-            regions,
-            selection_mode="multi",
-            key="filter_regions",
-            label_visibility="collapsed",
-            width="content",
-        ) or filter_region_defaults
+        with st.container(border=True):
+            st.caption("시장")
+            selected_regions = st.pills(
+                "국가",
+                regions,
+                selection_mode="multi",
+                key="filter_regions",
+                label_visibility="collapsed",
+                width="content",
+            ) or filter_region_defaults
 
-    with st.container(border=True):
-        st.caption("브랜드")
-        selected_brands = st.pills(
-            "브랜드",
-            brands,
-            selection_mode="multi",
-            key="filter_brands",
-            label_visibility="collapsed",
-            width="content",
-        ) or filter_brand_defaults
+        with st.container(border=True):
+            st.caption("브랜드")
+            selected_brands = st.pills(
+                "브랜드",
+                brands,
+                selection_mode="multi",
+                key="filter_brands",
+                label_visibility="collapsed",
+                width="content",
+            ) or filter_brand_defaults
 
-    with st.container(border=True):
-        st.caption("감성 라벨")
-        selected_sentiments = st.pills(
-            "감성",
-            sentiments,
-            selection_mode="multi",
-            key="filter_sentiments",
-            label_visibility="collapsed",
-            width="content",
-        ) or filter_sentiment_defaults
+        with st.container(border=True):
+            st.caption("감성 라벨")
+            selected_sentiments = st.pills(
+                "감성",
+                sentiments,
+                selection_mode="multi",
+                key="filter_sentiments",
+                label_visibility="collapsed",
+                width="content",
+            ) or filter_sentiment_defaults
 
-    with st.container(border=True):
-        st.caption("고객경험여정")
-        selected_cej = st.pills(
-            "고객경험여정 단계",
-            cej_labels,
-            selection_mode="multi",
-            key="filter_cej",
-            label_visibility="collapsed",
-            width="content",
-        ) or filter_cej_defaults
+        with st.container(border=True):
+            st.caption("고객경험여정")
+            selected_cej = st.pills(
+                "고객경험여정 단계",
+                cej_labels,
+                selection_mode="multi",
+                key="filter_cej",
+                label_visibility="collapsed",
+                width="content",
+            ) or filter_cej_defaults
 
-    with st.container(border=True):
-        st.caption("고급 옵션")
-        keyword_query = st.text_input(
-            "댓글 내 키워드 검색",
-            "",
-            placeholder="예: 소음, 냉각, warranty",
+        with st.container(border=True):
+            st.caption("고급 옵션")
+            keyword_query = st.text_input(
+                "댓글 내 키워드 검색",
+                "",
+                placeholder="예: 소음, 냉각, warranty",
+            )
+        weeks_per_view = st.slider(
+            "차트 한 화면 주차 수",
+            min_value=4,
+            max_value=24,
+            value=12,
+            step=2,
         )
-    weeks_per_view = st.slider(
-        "차트 한 화면 주차 수",
-        min_value=4,
-        max_value=24,
-        value=12,
-        step=2,
-    )
 
     
-bundle = compute_filtered_bundle(
-    comments_df,
-    videos_df,
-    data["quality_summary"],
-    {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
-     data.get("representative_bundles", pd.DataFrame()),
-     data.get("opinion_units", pd.DataFrame()),
- )
+    bundle = compute_filtered_bundle(
+        comments_df,
+        videos_df,
+        data["quality_summary"],
+        {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
+         data.get("representative_bundles", pd.DataFrame()),
+         data.get("opinion_units", pd.DataFrame()),
+     )
 
-filtered_comments = bundle["comments"]
-filtered_videos = bundle["videos"]
-if filtered_comments.empty and not keyword_query:
-      fallback_filters = {"products": available_products, "regions": regions, "sentiments": sentiments, "cej": cej_labels, "brands": brands, "keyword_query": ""}
-      bundle = compute_filtered_bundle(
-          comments_df,
-          videos_df,
-          data["quality_summary"],
-          fallback_filters,
-          data.get("representative_bundles", pd.DataFrame()),
-          data.get("opinion_units", pd.DataFrame()),
-      )
-      filtered_comments = bundle["comments"]
-      filtered_videos = bundle["videos"]
-all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
-total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
+    filtered_comments = bundle["comments"]
+    filtered_videos = bundle["videos"]
+    if filtered_comments.empty and not keyword_query:
+          fallback_filters = {"products": available_products, "regions": regions, "sentiments": sentiments, "cej": cej_labels, "brands": brands, "keyword_query": ""}
+          bundle = compute_filtered_bundle(
+              comments_df,
+              videos_df,
+              data["quality_summary"],
+              fallback_filters,
+              data.get("representative_bundles", pd.DataFrame()),
+              data.get("opinion_units", pd.DataFrame()),
+          )
+          filtered_comments = bundle["comments"]
+          filtered_videos = bundle["videos"]
+    all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
+    total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
 
-page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
+    page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
 
     weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
 
