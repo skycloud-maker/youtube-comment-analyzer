@@ -2033,7 +2033,7 @@ with st.sidebar:
 
     with st.container(border=True):
         st.caption("제품 범위")
-        st.caption(f"현재 분석 데이터가 있는 제품군: {', '.join(default_products)}")
+        st.caption(f"현재 분석 데이터가 있는 제품군: {', '.join(available_products)}")
         selected_products = st.pills(
             "제품군",
             products,
@@ -2094,41 +2094,43 @@ with st.sidebar:
             "",
             placeholder="예: 소음, 냉각, warranty",
         )
-        weeks_per_view = st.slider(
-            "차트 한 화면 주차 수",
-            min_value=4,
-            max_value=24,
-            value=12,
-            step=2,
-        )
+    weeks_per_view = st.slider(
+        "차트 한 화면 주차 수",
+        min_value=4,
+        max_value=24,
+        value=12,
+        step=2,
+    )
 
     
-    bundle = compute_filtered_bundle(
-        comments_df,
-        videos_df,
-        data["quality_summary"],
-        {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
-        data.get("representative_bundles", pd.DataFrame()),
-        data.get("opinion_units", pd.DataFrame()),
-    )
-    filtered_comments = bundle["comments"]
-    filtered_videos = bundle["videos"]
-    if filtered_comments.empty and not keyword_query:
-        fallback_filters = {"products": available_products, "regions": regions, "sentiments": sentiments, "cej": cej_labels, "brands": brands, "keyword_query": ""}
-        bundle = compute_filtered_bundle(
-            comments_df,
-            videos_df,
-            data["quality_summary"],
-            fallback_filters,
-            data.get("representative_bundles", pd.DataFrame()),
-            data.get("opinion_units", pd.DataFrame()),
-        )
-        filtered_comments = bundle["comments"]
-        filtered_videos = bundle["videos"]
-    all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
-    total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
-    with st.sidebar:
-        page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
+bundle = compute_filtered_bundle(
+    comments_df,
+    videos_df,
+    data["quality_summary"],
+    {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
+     data.get("representative_bundles", pd.DataFrame()),
+     data.get("opinion_units", pd.DataFrame()),
+ )
+
+filtered_comments = bundle["comments"]
+filtered_videos = bundle["videos"]
+if filtered_comments.empty and not keyword_query:
+      fallback_filters = {"products": available_products, "regions": regions, "sentiments": sentiments, "cej": cej_labels, "brands": brands, "keyword_query": ""}
+      bundle = compute_filtered_bundle(
+          comments_df,
+          videos_df,
+          data["quality_summary"],
+          fallback_filters,
+          data.get("representative_bundles", pd.DataFrame()),
+          data.get("opinion_units", pd.DataFrame()),
+      )
+      filtered_comments = bundle["comments"]
+      filtered_videos = bundle["videos"]
+all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
+total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
+
+
+    page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
 
     weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
 
