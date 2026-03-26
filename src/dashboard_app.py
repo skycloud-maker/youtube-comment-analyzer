@@ -38,46 +38,7 @@ def _get_font_file() -> Path | None:
     ]
     return next((p for p in candidates if p.exists()), None)
 
-#라이트용
-def get_mode() -> str:
-    try:
-        mode = st.query_params.get("mode", "full")  # Streamlit query params [1](https://docs.streamlit.io/develop/api-reference/caching-and-state/st.query_params)
-    except Exception:
-        mode = "full"
-    return str(mode).lower()
 
-def render_comments_lite(comments_df: pd.DataFrame) -> None:
-    st.subheader("댓글(경량 표시: 샘플/페이지네이션)")
-
-    if comments_df.empty:
-        st.info("댓글 데이터가 없습니다.")
-        return
-
-    # ✅ 페이지 크기(한 번에 보여주는 행 수)
-    page_size = st.selectbox("페이지 크기", [50, 100, 200, 500], index=1)
-
-    # ✅ (중요) 화면 렌더링/메모리 피크를 줄이기 위해 샘플 제한
-    # 전체를 '읽는 것'과 '화면에 그리는 것'은 비용이 다릅니다.
-    max_rows = st.selectbox("최대 로딩 행 수(경량)", [1000, 3000, 5000, 10000], index=1)
-
-    view_df = comments_df
-    if len(view_df) > max_rows:
-        # 최신/대표 기준 정렬이 있으면 그걸 쓰고, 없으면 앞에서부터
-        sort_cols = [c for c in ["published_at", "like_count"] if c in view_df.columns]
-        if sort_cols:
-            view_df = view_df.sort_values(sort_cols, ascending=[False]*len(sort_cols))
-        view_df = view_df.head(max_rows).copy()
-        st.caption(f"전체 {len(comments_df):,}건 중 상위 {len(view_df):,}건만 경량 로딩했습니다.")
-
-    total = len(view_df)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1)
-    start = (page - 1) * page_size
-    end = min(start + page_size, total)
-
-    st.caption(f"{start+1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
-    st.dataframe(view_df.iloc[start:end], use_container_width=True, hide_index=True)
-#
 
 def _get_font_prop():
     """Matplotlib용 FontProperties"""
@@ -1587,23 +1548,28 @@ def _collect_similar_comments_from_samples(selected: pd.Series) -> pd.DataFrame:
         sample_items = json.loads(_safe_text(selected.get("sample_comments_json", "[]")) or "[]")
     except Exception:
         sample_items = []
+
     rows = []
     seen = set()
+
     for idx, item in enumerate(sample_items):
         original_text = _safe_text(item.get("original_text", item.get("display_text", "")))
         translated_text = _safe_text(item.get("translated_text", ""))
         unique_id = _safe_text(item.get("opinion_id", item.get("comment_id", ""))) or original_text or f"sample_{idx}"
+
         if not original_text or unique_id in seen:
             continue
         seen.add(unique_id)
+
         rows.append({
             "comment_id": unique_id,
-            "??": original_text,
-            "??(??)": translated_text,
-            "??? ?": int(pd.to_numeric(item.get("likes_count", 0), errors="coerce") or 0),
-            "PII": "??" if _safe_text(item.get("pii_flag", "N")) == "Y" else "??",
-            "????": _safe_text(item.get("written_at", "")),
+            "원문": original_text,
+            "번역(참고)": translated_text,
+            "좋아요 수": int(pd.to_numeric(item.get("likes_count", 0), errors="coerce") or 0),
+            "PII": "있음" if _safe_text(item.get("pii_flag", "N")) == "Y" else "없음",
+            "작성일시": _safe_text(item.get("written_at", "")),
         })
+
     return pd.DataFrame(rows)
 
 def _localized_video_title(title: str) -> str:
@@ -1694,24 +1660,29 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             if similar_comments.empty:
                 similar_comments = _collect_similar_comments_from_samples(selected)
             if not similar_comments.empty:
-                with st.expander("?? ??? ??"):
+                with st.expander("유사 댓글 샘플 보기"):
                     preview_rows = similar_comments.head(5)
+
                     for _, sample in preview_rows.iterrows():
-                        st.markdown(f"- {_safe_text(sample.get('??', ''))}")
-                        sample_translation = _safe_text(sample.get('??(??)', ''))
+                        st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
+
+                        sample_translation = _safe_text(sample.get('번역(참고)', ''))
                         if sample_translation:
-                            st.caption(f"??(??): {sample_translation}")
+                            st.caption(f"번역(참고): {sample_translation}")
+
                         meta_bits = [
-                            f"??? {_safe_text(sample.get('??? ?', 0))}",
-                            f"PII {_safe_text(sample.get('PII', '??'))}",
+                            f"좋아요 {_safe_text(sample.get('좋아요 수', 0))}",
+                            f"PII {_safe_text(sample.get('PII', '없음'))}",
                         ]
-                        written_at = _safe_text(sample.get('????', ''))
+                        written_at = _safe_text(sample.get('작성일시', ''))
                         if written_at:
                             meta_bits.append(str(written_at))
-                        st.caption(" ? ".join(meta_bits))
-                    csv_bytes = similar_comments.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+
+                        st.caption(" · ".join(meta_bits))
+
+                    csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     st.download_button(
-                        label="?? ?? ??? ????",
+                        label="유사 댓글 CSV 다운로드",
                         data=csv_bytes,
                         file_name=f"similar_comments_{key_prefix}_{idx + 1}.csv",
                         mime="text/csv",
@@ -2057,68 +2028,81 @@ def main() -> None:
     filter_sentiment_defaults = _normalize_pill_state("filter_sentiments", sentiments, default_sentiments)
     filter_cej_defaults = _normalize_pill_state("filter_cej", cej_labels, default_cej)
 
-    with st.sidebar:
-        st.markdown("### " + codecs.decode(r"\ud0d0\uc0c9 \ud544\ud130", "unicode_escape"))
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\uc81c\ud488 \ubc94\uc704", "unicode_escape"))
-            st.caption(f"{codecs.decode(r'\ud604\uc7ac \ubd84\uc11d \ub370\uc774\ud130\uac00 \uc788\ub294 \uc81c\ud488\uad70', 'unicode_escape')}: {', ' .join(default_products)}")
-            selected_products = st.pills(
-                codecs.decode(r"\uc81c\ud488\uad70", "unicode_escape"),
-                products,
-                selection_mode="multi",
-                key="filter_products",
-                label_visibility="collapsed",
-                width="content",
-            ) or filter_product_defaults
+with st.sidebar:
+    st.markdown("### 탐색 필터")
 
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\uc2dc\uc7a5", "unicode_escape"))
-            selected_regions = st.pills(
-                codecs.decode(r"\uad6d\uac00", "unicode_escape"),
-                regions,
-                selection_mode="multi",
-                key="filter_regions",
-                label_visibility="collapsed",
-                width="content",
-            ) or filter_region_defaults
+    with st.container(border=True):
+        st.caption("제품 범위")
+        st.caption(f"현재 분석 데이터가 있는 제품군: {', '.join(default_products)}")
+        selected_products = st.pills(
+            "제품군",
+            products,
+            selection_mode="multi",
+            key="filter_products",
+            label_visibility="collapsed",
+            width="content",
+        ) or filter_product_defaults
 
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\ube0c\ub79c\ub4dc", "unicode_escape"))
-            selected_brands = st.pills(
-                codecs.decode(r"\ube0c\ub79c\ub4dc", "unicode_escape"),
-                brands,
-                selection_mode="multi",
-                key="filter_brands",
-                label_visibility="collapsed",
-                width="content",
-            ) or filter_brand_defaults
+    with st.container(border=True):
+        st.caption("시장")
+        selected_regions = st.pills(
+            "국가",
+            regions,
+            selection_mode="multi",
+            key="filter_regions",
+            label_visibility="collapsed",
+            width="content",
+        ) or filter_region_defaults
 
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\uac10\uc131 \ub77c\ubca8", "unicode_escape"))
-            selected_sentiments = st.pills(
-                codecs.decode(r"\uac10\uc131", "unicode_escape"),
-                sentiments,
-                selection_mode="multi",
-                key="filter_sentiments",
-                label_visibility="collapsed",
-                width="content",
-            ) or filter_sentiment_defaults
+    with st.container(border=True):
+        st.caption("브랜드")
+        selected_brands = st.pills(
+            "브랜드",
+            brands,
+            selection_mode="multi",
+            key="filter_brands",
+            label_visibility="collapsed",
+            width="content",
+        ) or filter_brand_defaults
 
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\uace0\uac1d\uacbd\ud5d8\uc5ec\uc815", "unicode_escape"))
-            selected_cej = st.pills(
-                codecs.decode(r"\uace0\uac1d\uacbd\ud5d8\uc5ec\uc815 \ub2e8\uacc4", "unicode_escape"),
-                cej_labels,
-                selection_mode="multi",
-                key="filter_cej",
-                label_visibility="collapsed",
-                width="content",
-            ) or filter_cej_defaults
+    with st.container(border=True):
+        st.caption("감성 라벨")
+        selected_sentiments = st.pills(
+            "감성",
+            sentiments,
+            selection_mode="multi",
+            key="filter_sentiments",
+            label_visibility="collapsed",
+            width="content",
+        ) or filter_sentiment_defaults
 
-        with st.container(border=True):
-            st.caption(codecs.decode(r"\uace0\uae09 \uc635\uc158", "unicode_escape"))
-            keyword_query = st.text_input(codecs.decode(r"\ub313\uae00 \ub0b4 \ud0a4\uc6cc\ub4dc \uac80\uc0c9", "unicode_escape"), "", placeholder=codecs.decode(r"\uc608: \uc18c\uc74c, \ub0c9\uac01, warranty", "unicode_escape"))
-            weeks_per_view = st.slider(codecs.decode(r"\ucc28\ud2b8 \ud55c \ud654\uba74 \uc8fc\ucc28 \uc218", "unicode_escape"), min_value=4, max_value=24, value=12, step=2)
+    with st.container(border=True):
+        st.caption("고객경험여정")
+        selected_cej = st.pills(
+            "고객경험여정 단계",
+            cej_labels,
+            selection_mode="multi",
+            key="filter_cej",
+            label_visibility="collapsed",
+            width="content",
+        ) or filter_cej_defaults
+
+    with st.container(border=True):
+        st.caption("고급 옵션")
+        keyword_query = st.text_input(
+            "댓글 내 키워드 검색",
+            "",
+            placeholder="예: 소음, 냉각, warranty",
+        )
+        weeks_per_view = st.slider(
+            "차트 한 화면 주차 수",
+            min_value=4,
+            max_value=24,
+            value=12,
+            step=2,
+        )
+
+    
     bundle = compute_filtered_bundle(
         comments_df,
         videos_df,
