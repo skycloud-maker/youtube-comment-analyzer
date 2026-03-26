@@ -2129,8 +2129,7 @@ if filtered_comments.empty and not keyword_query:
 all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
 total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
 
-
-    page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
+page = st.slider("주차 페이지", min_value=1, max_value=total_pages, value=1)
 
     weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
 
