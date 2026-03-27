@@ -2017,7 +2017,7 @@ def main() -> None:
         (comments_df[COL_CEJ].isin(["탐색", "결정", "교체"]))
     ]
 
-st.write("탐색/결정/교체 valid 댓글 수:", len(cej_debug))
+    st.write("탐색/결정/교체 valid 댓글 수:", len(cej_debug))
 
     # =====================================================
     # ✅ Lite / Full 분기 (기존 full은 그대로 유지)
