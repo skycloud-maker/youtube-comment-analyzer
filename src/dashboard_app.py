@@ -1724,6 +1724,28 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
 def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> pd.DataFrame:
     videos = filtered_videos.copy()
     comments = filtered_comments.copy()
+
+    # ✅ [1번 수정] video_id 기준으로 영상 1행으로 정리 + product는 합쳐서 표시
+    if not comments.empty and "video_id" in comments.columns:
+        # 이 영상에 연결된 댓글의 product를 모아서 "A, B, C" 형태로 만듦
+        if "product" in comments.columns:
+            product_map = (
+                comments.dropna(subset=["video_id"])
+                .groupby("video_id")["product"]
+                .apply(lambda s: ", ".join(sorted({str(x).strip() for x in s.dropna() if str(x).strip()})))
+            )
+        else:
+            product_map = pd.Series(dtype=str)
+
+        # videos가 product 단위로 중복되어 있을 수 있으므로 video_id 1행으로 압축
+        if "video_id" in videos.columns and not videos.empty:
+            keep_cols = ["video_id", "region", "title", "video_url", "published_at", "view_count", "like_count", "comment_count"]
+            keep_cols = [c for c in keep_cols if c in videos.columns]
+            videos = videos.sort_values(["video_id"]).drop_duplicates(subset=["video_id"], keep="first")
+            # product 컬럼은 댓글 기반으로 재작성(있으면 덮어씀)
+            if len(product_map) > 0:
+                videos["product"] = videos["video_id"].map(product_map).fillna(videos.get("product", ""))
+    
     if videos.empty and not comments.empty:
         rebuild_cols = ["product", "region", "title", "video_url", "published_at", "view_count", "like_count", "comment_count"]
         available = [c for c in rebuild_cols if c in comments.columns]
@@ -1766,6 +1788,13 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
     )
 
     summary = videos.merge(comment_stats, on="video_id", how="left").merge(negative_reason, on="video_id", how="left")
+
+    
+    # ✅ [2번 수정] 주요 부정 포인트 깨짐 방지 (_safe_text 적용)
+    if "주요 부정 포인트" in summary.columns:
+        summary["주요 부정 포인트"] = summary["주요 부정 포인트"].map(_safe_text)
+
+    
     for col in ["\ubd84\uc11d \ub313\uae00 \uc218", "\uc720\ud6a8 \ub313\uae00 \uc218", "\uc81c\uc678 \ub313\uae00 \uc218", "\uae0d\uc815 \ub313\uae00 \uc218", "\ubd80\uc815 \ub313\uae00 \uc218", "\uc911\ub9bd \ub313\uae00 \uc218", "\ubd80\uc815 \ube44\uc728"]:
         if col in summary.columns:
             summary[col] = summary[col].fillna(0)
@@ -1781,10 +1810,23 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
     st.markdown("### 영상 분석 요약")
     st.caption("댓글 분석에 활용된 영상을 영상 단위로 요약하고, 필요할 때만 상세 분석을 확인할 수 있습니다.")
     summary = build_video_summary(filtered_comments, filtered_videos)
-    st.caption(f"영상 요약 계산 결과: 댓글 {len(filtered_comments):,}건 / 영상 {len(filtered_videos):,}건 / 요약 {len(summary):,}건")
+
+    
+    # ✅ [여기!] density_display 기본값 초기화 (이 줄 하나)
+    density_display = pd.DataFrame()
+
+    st.caption(
+        f"영상 요약 계산 결과: 댓글 {len(filtered_comments):,}건 / "
+        f"영상 {len(filtered_videos):,}건 / 요약 {len(summary):,}건"
+    )
     if summary.empty:
         st.info("표시할 영상 요약 데이터가 없습니다.")
         return
+
+    # ✅ summary가 비어있지 않을 때만 video_id 사용
+    if not density_df.empty and "video_id" in density_df.columns and "video_id" in summary.columns:
+        video_ids = set(summary["video_id"])
+        density_df = density_df[density_df["video_id"].isin(video_ids)].copy()
 
     k1, k2, k3 = st.columns(3)
     with k1:
@@ -1812,6 +1854,7 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
         st.markdown("#### 영상당 부정 댓글 밀도")
         if not density_df.empty:
             density_display = pd.DataFrame({
+                "video_id": density_df.get("video_id"),  # ✅ 반드시 추가
                 "product": density_df.get("product", pd.Series("", index=density_df.index)),
                 COL_COUNTRY: density_df.get(COL_COUNTRY, density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region)),
                 COL_VIDEO_TITLE: density_df.get("title", density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index))).map(_localized_video_title),
@@ -1826,16 +1869,24 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
         else:
             st.info("표시할 영상 밀도 데이터가 없습니다.")
 
-    options = summary[["video_id", COL_VIDEO_TITLE, "product", COL_COUNTRY]].drop_duplicates().to_dict("records")
-    select_options = [{"video_id": "", COL_VIDEO_TITLE: "선택 안 함", "product": "-", COL_COUNTRY: "-"}] + options
-    selected = st.selectbox(
-        "상세 분석할 영상 선택",
-        options=select_options,
-        format_func=lambda row: "상세 분석할 영상을 선택하세요" if not row.get("video_id") else f"[{row.get('product', '-')}/{row.get(COL_COUNTRY, '-')}] {_localized_video_title(_safe_text(row.get(COL_VIDEO_TITLE, '-')))}",
-        key="video_analysis_selector",
-    )
-    if selected and selected.get("video_id"):
-        selected_row = summary[summary["video_id"] == selected["video_id"]].iloc[0]
+    
+    # ✅ ✅ ✅ 여기!
+    if density_display.empty:
+        st.info("부정 밀도 데이터가 없어 영상 상세 분석 선택을 표시하지 않습니다.")
+
+
+    # ✅ [4번 수정] 영상당 부정 댓글 밀도 리스트 기준으로 상세 분석 연결
+    if not density_display.empty:
+        selected_video_id = st.selectbox(
+            "부정 밀도 기준 영상 상세 분석",
+            options=density_display["video_id"],
+            format_func=lambda vid: density_display.loc[
+                density_display["video_id"] == vid, COL_VIDEO_TITLE
+            ].iloc[0],
+            key="video_density_selector",
+        )
+
+        selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
         render_video_detail_page(filtered_comments, selected_row)
 
 def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd.Series) -> None:
@@ -1891,13 +1942,11 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
     st.altair_chart(chart, use_container_width=True)
 
     with st.container(border=True):
-        st.markdown("#### 대표 코멘트")
-        neg = _build_bundle_showcase(video_comments, sentiment="negative", limit=5)
-        pos = _build_bundle_showcase(video_comments, sentiment="positive", limit=5)
-        st.markdown(f"##### 부정 대표 코멘트 {len(neg)}건")
-        render_comment_table(neg, key_prefix="negative", source_comments=video_comments)
-        st.markdown(f"##### 긍정 대표 코멘트 {len(pos)}건")
-        render_comment_table(pos, key_prefix="positive", source_comments=video_comments)
+        render_representative_comments(
+            filtered_comments=video_comments,
+            representative_bundles=None,
+            opinion_units=None,
+        )
 
     with st.container(border=True):
         st.markdown("#### 전체 댓글 목록")
