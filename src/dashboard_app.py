@@ -946,6 +946,8 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
             | base_comments["text_display"].fillna("").str.contains(keyword_query, case=False, na=False)
         ]
 
+    all_comments = base_comments.copy()  # ✅ 감성 필터 전(전체 분포용)
+    
     filtered_comments = base_comments.copy()
     if sentiments and COL_SENTIMENT in filtered_comments.columns:
         filtered_comments = filtered_comments[filtered_comments[COL_SENTIMENT].isin(sentiments)]
@@ -1002,6 +1004,7 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         meaningful_count = len(filtered_comments)
     return {
         "comments": filtered_comments,
+        "all_comments": all_comments,   # ✅ 추가
         "representative_comments": representative_comments,
         "videos": filtered_videos,
         "representative_bundles": representative_bundles,
@@ -1678,41 +1681,90 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 with st.expander("원문(Original) 보기"):
                     st.write(original_text)
 
-            selected_exclude_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
+            # ✅ 대표 코멘트(현재 카드) 고유 ID (있으면)
+            rep_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
 
-            similar_comments = _collect_similar_comments_for_download(
-                source_comments if source_comments is not None else pd.DataFrame(),
-                selected,
-                sentiment_name,
-                exclude_id=selected_exclude_id,
-            )
+            # ✅ 이 대표 코멘트가 속한 영상 식별 (video_id 우선, 없으면 video_link로)
+            video_id = _safe_text(selected.get("video_id", "")) or _safe_text(working_selected.get("video_id", ""))
+            video_link_for_filter = _safe_text(working_selected.get(COL_VIDEO_LINK, selected.get(COL_VIDEO_LINK, "")))
 
+            pool = source_comments if source_comments is not None else pd.DataFrame()
+            if pool.empty:
+                similar_comments = pd.DataFrame()
+            else:
+                working_pool = pool.copy()
+
+                # 1) 영상 필터: video_id가 있으면 video_id로, 없으면 링크로
+                if video_id and "video_id" in working_pool.columns:
+                    working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
+                elif video_link_for_filter:
+                    if COL_VIDEO_LINK in working_pool.columns:
+                        working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
+                    elif "video_url" in working_pool.columns:
+                        working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
+    
+                # 2) 분석 대상(valid)만
+                if "comment_validity" in working_pool.columns:
+                    working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
+
+                # 3) 같은 감성만
+                if "sentiment_label" in working_pool.columns:
+                    working_pool = working_pool[working_pool["sentiment_label"].astype(str) == sentiment_name].copy()
+                elif "sentiment_code" in working_pool.columns:
+                    working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
+
+                # 4) 대표 코멘트 제외 (comment_id / source_content_id / opinion_id 중 있는 걸로)
+                if rep_id:
+                    if "comment_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["comment_id"].astype(str) != rep_id].copy()
+                    if "source_content_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["source_content_id"].astype(str) != rep_id].copy()
+                    if "opinion_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["opinion_id"].astype(str) != rep_id].copy()
+
+                # ✅ 유사 댓글(=대표 제외 나머지 전부) 테이블 생성
+                # (번역은 대량 처리 시 비용이 커서 CSV에는 원문 중심으로 제공)
+                def _get_text(row):
+                    return _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", row.get("display_text", "")))))
+
+                def _get_likes(row):
+                    return int(pd.to_numeric(row.get(COL_LIKES, row.get("like_count", row.get("likes_count", 0))), errors="coerce") or 0)
+
+                def _get_written_at(row):
+                    return _safe_text(row.get(COL_WRITTEN_AT, row.get("published_at", "")))
+
+                def _get_pii(row):
+                    return "있음" if _safe_text(row.get("pii_flag", "N")) == "Y" else "없음"
+
+
+                # 빈 원문 제거 + 중복 제거
+                similar_comments = pd.DataFrame({
+                    "comment_id": working_pool.get("comment_id", working_pool.get("opinion_id", pd.Series("", index=working_pool.index))).astype(str),
+                    "원문": working_pool.apply(_get_text, axis=1),
+                    "좋아요 수": working_pool.apply(_get_likes, axis=1),
+                    "PII": working_pool.apply(_get_pii, axis=1),
+                    "작성일시": working_pool.apply(_get_written_at, axis=1),
+                })
+
+                
+                similar_comments = similar_comments[
+                    similar_comments["원문"].str.strip().ne("")
+                ].drop_duplicates(subset=["comment_id"]).copy()
+
+
+            # ✅ UI: 유사 댓글(대표 제외 나머지 전체) 표시/다운로드
             if similar_comments.empty:
-                similar_comments = _collect_similar_comments_from_samples(selected)
-            if not similar_comments.empty:
-                with st.expander("유사 댓글 샘플 보기"):
+                st.info("대표 코멘트를 제외하면 동일 감성의 유사 댓글이 없습니다.")
+            else:
+                with st.expander(f"유사 댓글 보기 (대표 제외 잔여 {len(similar_comments):,}건)"):
                     preview_rows = similar_comments.head(5)
-
                     for _, sample in preview_rows.iterrows():
                         st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
-
-                        sample_translation = _safe_text(sample.get('번역(참고)', ''))
-                        if sample_translation:
-                            st.caption(f"번역(참고): {sample_translation}")
-
-                        meta_bits = [
-                            f"좋아요 {_safe_text(sample.get('좋아요 수', 0))}",
-                            f"PII {_safe_text(sample.get('PII', '없음'))}",
-                        ]
-                        written_at = _safe_text(sample.get('작성일시', ''))
-                        if written_at:
-                            meta_bits.append(str(written_at))
-
-                        st.caption(" · ".join(meta_bits))
+                        st.caption(f"좋아요 {sample.get('좋아요 수', 0)} · PII {sample.get('PII', '없음')} · {_safe_text(sample.get('작성일시', ''))}")
 
                     csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     st.download_button(
-                        label="유사 댓글 CSV 다운로드 (대표 일부)",
+                        label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
                         data=csv_bytes,
                         file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
                         mime="text/csv",
@@ -1765,19 +1817,13 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
         return videos
 
     comment_stats = comments.groupby("video_id", dropna=False).agg(
-        **{
-            "\ubd84\uc11d \ub313\uae00 \uc218": ("video_id", "size"),
-            "\uc720\ud6a8 \ub313\uae00 \uc218": ("comment_validity", lambda s: int((s == "valid").sum())),
-            "\uc81c\uc678 \ub313\uae00 \uc218": ("comment_validity", lambda s: int((s == "excluded").sum())),
-            "\uae0d\uc815 \ub313\uae00 \uc218": ("sentiment_label", lambda s: int((s == "positive").sum())),
-            "\ubd80\uc815 \ub313\uae00 \uc218": ("sentiment_label", lambda s: int((s == "negative").sum())),
-            "\uc911\ub9bd \ub313\uae00 \uc218": ("sentiment_label", lambda s: int((s == "neutral").sum())),
-        }
+        분석_전체_댓글_수=("video_id", "size"),
+        긍정_댓글_수=("sentiment_label", lambda s: int((s == "positive").sum())),
+        부정_댓글_수=("sentiment_label", lambda s: int((s == "negative").sum())),
+        중립_댓글_수=("sentiment_label", lambda s: int((s == "neutral").sum())),
+        제외_댓글_수=("comment_validity", lambda s: int((s == "excluded").sum())),
     ).reset_index()
-    comment_stats["\ubd80\uc815 \ube44\uc728"] = comment_stats.apply(
-        lambda row: (row["\ubd80\uc815 \ub313\uae00 \uc218"] / row["\uc720\ud6a8 \ub313\uae00 \uc218"]) if row["\uc720\ud6a8 \ub313\uae00 \uc218"] else 0.0,
-        axis=1,
-    )
+
 
     negative_reason = (
         comments[comments["sentiment_label"] == "negative"]
@@ -1806,78 +1852,94 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
 
 
 
-def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame, density_df: pd.DataFrame) -> None:
+def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> None:
     st.markdown("### 영상 분석 요약")
-    st.caption("댓글 분석에 활용된 영상을 영상 단위로 요약하고, 필요할 때만 상세 분석을 확인할 수 있습니다.")
-    summary = build_video_summary(filtered_comments, filtered_videos)
+    st.caption("상단은 영상별 전체 댓글 분포(긍/부/중립/제외), 하단은 분석 대상(valid) 댓글 기준으로 밀도/상세 분석을 제공합니다.")
 
-    
-    # ✅ [여기!] density_display 기본값 초기화 (이 줄 하나)
-    density_display = pd.DataFrame()
+    # 1) 전체 분포용(긍/부/중립/제외 포함)
+    all_video_comments = all_comments.copy()
+
+    # 2) 분석 대상(valid)만 (여기서 중립까지 포함)
+    analysis_comments = all_video_comments[
+        all_video_comments.get("comment_validity", "valid").astype(str) == "valid"
+    ].copy()
+
+    summary = build_video_summary(all_video_comments, filtered_videos)
 
     st.caption(
-        f"영상 요약 계산 결과: 댓글 {len(filtered_comments):,}건 / "
+        f"영상 요약 계산 결과: 댓글 {len(all_video_comments):,}건 / "
         f"영상 {len(filtered_videos):,}건 / 요약 {len(summary):,}건"
     )
     if summary.empty:
         st.info("표시할 영상 요약 데이터가 없습니다.")
         return
 
-    # ✅ summary가 비어있지 않을 때만 video_id 사용
-    if not density_df.empty and "video_id" in density_df.columns and "video_id" in summary.columns:
-        video_ids = set(summary["video_id"])
-        density_df = density_df[density_df["video_id"].isin(video_ids)].copy()
-
+    # ✅ 상단 카드(전체 기준)
     k1, k2, k3 = st.columns(3)
     with k1:
         render_card("분석 영상 수", f"{len(summary):,}")
     with k2:
-        render_card("총 분석 댓글", f"{int(summary['분석 댓글 수'].sum()):,}")
+        # 전체 댓글 기준 합계
+        total_all = int(pd.to_numeric(summary.get("분석_전체_댓글_수", 0), errors="coerce").fillna(0).sum())
+        render_card("전체 댓글(합)", f"{total_all:,}")
     with k3:
-        top_video = _localized_video_title(_safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, '-'))) if not summary.empty else '-'
+        top_video = _localized_video_title(_safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-")))
         render_card("최상위 이슈 영상", str(top_video)[:28] or "-")
 
+    # ✅ 상단 리스트(전체 분포)
     summary_display = summary.copy()
     if COL_VIDEO_TITLE in summary_display.columns:
         summary_display[COL_VIDEO_TITLE] = summary_display[COL_VIDEO_TITLE].map(_localized_video_title)
-    summary_display["View Analysis"] = "상세 분석 보기"
-    display_cols = [
-        "product", COL_COUNTRY, COL_VIDEO_TITLE, "발행일", "view_count", "분석 댓글 수", "유효 댓글 수",
-        "긍정 댓글 수", "부정 댓글 수", "중립 댓글 수", "제외 댓글 수", "부정 비율", "주요 부정 포인트", "View Analysis",
+
+    # 보기 좋은 컬럼만 노출
+    show_cols = [
+        "product", COL_COUNTRY, COL_VIDEO_TITLE, "발행일", "view_count",
+        "분석_전체_댓글_수", "긍정_댓글_수", "부정_댓글_수", "중립_댓글_수", "제외_댓글_수",
+        "주요 부정 포인트",
     ]
-    existing_cols = [col for col in display_cols if col in summary_display.columns]
-    st.dataframe(summary_display[existing_cols].head(100), use_container_width=True, hide_index=True)
-    if len(summary_display) > 100:
-        st.caption(f"전체 {len(summary_display):,}개 영상 중 상위 100개만 먼저 표시합니다.")
+    show_cols = [c for c in show_cols if c in summary_display.columns]
+    st.dataframe(summary_display[show_cols].head(100), use_container_width=True, hide_index=True)
+
+    # ✅ 3) 부정 밀도(분석 대상 valid 기준) 계산 + 영상 메타 결합
+    density_display = pd.DataFrame()
+    edited = pd.DataFrame()
 
     with st.container(border=True):
-        st.markdown("#### 영상당 부정 댓글 밀도")
+        st.markdown("#### 영상당 부정 댓글 밀도 (분석 대상 valid 기준)")
 
-        if density_df.empty:
-            st.info("표시할 영상 밀도 데이터가 없습니다.")
-            edited = pd.DataFrame()
+        if analysis_comments.empty or "video_id" not in analysis_comments.columns:
+            st.info("분석 대상(valid) 댓글이 없어 밀도 계산이 불가합니다.")
         else:
-            density_display = pd.DataFrame({
-                "video_id": density_df.get("video_id"),
-                "product": density_df.get("product", pd.Series("", index=density_df.index)),
-                COL_COUNTRY: density_df.get(
-                    COL_COUNTRY,
-                    density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region),
-                ),
-                COL_VIDEO_TITLE: density_df.get(
-                    "title",
-                    density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index)),
-                ).map(_localized_video_title),
-                "부정 댓글 수": density_df.get("negative_comments", pd.Series(0, index=density_df.index)),
-                "분석 댓글 수": density_df.get("total_comments", pd.Series(0, index=density_df.index)),
-                "부정 밀도": density_df.get("negative_density", pd.Series(0.0, index=density_df.index)),
-                COL_VIDEO_LINK: density_df.get(
-                    "video_url",
-                    density_df.get(COL_VIDEO_LINK, pd.Series("", index=density_df.index)),
-                ),
-            })
+            density_core = (
+                analysis_comments.groupby("video_id", dropna=False)
+                .agg(
+                    분석_댓글_수=("video_id", "size"),
+                    긍정_댓글_수=("sentiment_label", lambda s: int((s == "positive").sum())),
+                    부정_댓글_수=("sentiment_label", lambda s: int((s == "negative").sum())),
+                    중립_댓글_수=("sentiment_label", lambda s: int((s == "neutral").sum())),
+                )
+                .reset_index()
+            )
+            density_core["부정_밀도"] = density_core["부정_댓글_수"] / density_core["분석_댓글_수"]
 
-            table_df = density_display.head(100).copy()
+            # 영상 메타(제목/링크/국가/제품) 붙이기
+            meta = filtered_videos.copy()
+            if "video_id" in meta.columns:
+                meta = meta.drop_duplicates(subset=["video_id"], keep="first")
+            else:
+                meta["video_id"] = ""
+
+            meta[COL_COUNTRY] = meta.get(COL_COUNTRY, meta.get("region", pd.Series("", index=meta.index)).map(localize_region))
+            meta[COL_VIDEO_TITLE] = meta.get("title", meta.get(COL_VIDEO_TITLE, pd.Series("", index=meta.index))).map(_localized_video_title)
+            meta[COL_VIDEO_LINK] = meta.get("video_url", meta.get(COL_VIDEO_LINK, pd.Series("", index=meta.index)))
+
+            density_display = density_core.merge(
+                meta[["video_id", "product", COL_COUNTRY, COL_VIDEO_TITLE, COL_VIDEO_LINK]],
+                on="video_id",
+                how="left",
+            )
+
+            table_df = density_display.sort_values(["부정_밀도", "부정_댓글_수"], ascending=[False, False]).head(100).copy()
             table_df.insert(0, "선택", False)
 
             edited = st.data_editor(
@@ -1886,33 +1948,25 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
                 hide_index=True,
                 num_rows="fixed",
                 column_config={
-                    "선택": st.column_config.CheckboxColumn(
-                        "선택", help="체크하면 아래에 해당 영상 상세 분석이 표시됩니다."
-                    ),
+                    "선택": st.column_config.CheckboxColumn("선택", help="체크하면 아래에 해당 영상 상세 분석이 표시됩니다."),
                     COL_VIDEO_TITLE: st.column_config.TextColumn("영상 제목", width="large"),
                 },
                 key="density_table_editor",
             )
 
-            if len(density_display) > 100:
-                st.caption(f"전체 {len(density_display):,}개 중 상위 100개만 먼저 표시합니다.")
-
-    # ✅ 표에서 선택된 행 → 바로 상세 분석
-    if density_df.empty:
+    # ✅ 4) 선택된 영상 → 상세 분석(분석 대상 valid 기준과 정합)
+    if density_display.empty:
         st.info("부정 밀도 데이터가 없어 영상 상세 분석 선택을 표시하지 않습니다.")
-    else:
-        checked = (
-            edited[edited["선택"] == True]
-            if (not edited.empty and "선택" in edited.columns)
-            else pd.DataFrame()
-        )
+        return
 
-        if not checked.empty:
-            selected_video_id = checked.iloc[0]["video_id"]
-            selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
-            render_video_detail_page(filtered_comments, selected_row)
-        else:
-            st.caption("👆 위 표에서 ‘선택’을 체크하면 아래에 상세 분석이 표시됩니다.")
+    checked = edited[edited["선택"] == True] if (not edited.empty and "선택" in edited.columns) else pd.DataFrame()
+    if checked.empty:
+        st.caption("👆 위 표에서 ‘선택’을 체크하면 아래에 상세 분석이 표시됩니다.")
+        return
+
+    selected_video_id = checked.iloc[0]["video_id"]
+    selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
+    render_video_detail_page(analysis_comments, selected_row)  # ✅ 상세는 valid 풀로만
 
 
 def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd.Series) -> None:
@@ -2223,9 +2277,13 @@ def main() -> None:
         {"products": selected_products, "regions": selected_regions, "sentiments": selected_sentiments, "cej": selected_cej, "brands": selected_brands, "keyword_query": keyword_query},
          data.get("representative_bundles", pd.DataFrame()),
          data.get("opinion_units", pd.DataFrame()),
-     )
+    )
+
 
     filtered_comments = bundle["comments"]
+    all_comments = bundle.get("all_comments", filtered_comments)  # ✅ 여기로 이동
+    filtered_videos = bundle["videos"]
+
     filtered_videos = bundle["videos"]
     if filtered_comments.empty and not keyword_query:
           fallback_filters = {"products": available_products, "regions": regions, "sentiments": sentiments, "cej": cej_labels, "brands": brands, "keyword_query": ""}
@@ -2269,13 +2327,7 @@ def main() -> None:
             brand_df[COL_BRAND] = brand_df[COL_BRAND].map(canonicalize_brand)
             brand_df = brand_df[brand_df[COL_BRAND].isin(selected_brands)]
 
-    density_df = data["negative_density"].copy()
-    if not density_df.empty:
-        density_df[COL_COUNTRY] = density_df["region"].map(localize_region)
-        if selected_products:
-            density_df = density_df[density_df["product"].isin(selected_products)]
-        if selected_regions:
-            density_df = density_df[density_df[COL_COUNTRY].isin(selected_regions)]
+
 
     validity_series = filtered_comments["comment_validity"] if "comment_validity" in filtered_comments.columns else pd.Series("valid", index=filtered_comments.index)
     valid_base = filtered_comments[validity_series.eq("valid")].copy()
@@ -2351,7 +2403,7 @@ def main() -> None:
     with top_action:
         st.download_button(
             "전체 Raw Data 엑셀 다운로드",
-            data=build_raw_download_package(raw_comments_export, filtered_videos, weekly_window, cej_df, brand_df, density_df),
+            data=build_raw_download_package(raw_comments_export, filtered_videos, weekly_window, cej_df, brand_df, pd.DataFrame()),
             file_name="voc_dashboard_raw_data.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
@@ -2473,7 +2525,7 @@ def main() -> None:
             render_representative_comments(bundle.get("representative_comments", filtered_comments), bundle.get("representative_bundles", pd.DataFrame()), bundle.get("opinion_units", pd.DataFrame()))
 
     with tab_videos:
-        render_video_summary_page(filtered_comments, filtered_videos, density_df)
+        render_video_summary_page(all_comments, filtered_videos)
 
 
 if __name__ == "__main__":
