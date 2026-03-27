@@ -1663,7 +1663,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 st.markdown("**추출 키워드/VoC(참고)**")
                 for item in voc_items:
                     evidence = _safe_text(item.get("evidence_span", "")) or "근거 문구 확인 필요"
-                    st.markdown(f"- {item['sentiment']} ? **{item['topic']}**: {item['insight']} (근거: {evidence})")
+                    st.markdown(f"- **[{item['sentiment']}] {item['topic']}**: {item['insight']} (근거: {evidence})")
 
             primary_label = "원문(Original)" if is_korean else "번역(참고)"
             primary_text = original_text if is_korean else (translation or "한국어 번역을 준비 중입니다.")
@@ -2050,7 +2050,7 @@ def main() -> None:
     default_regions = regions
     default_brands = [item for item in brands if item in comments_df.get(COL_BRAND, pd.Series(dtype=str)).dropna().astype(str).unique().tolist()] or brands
     default_sentiments = sentiments
-    default_cej = [item for item in cej_labels if item in comments_df.get(COL_CEJ, pd.Series(dtype=str)).dropna().astype(str).unique().tolist()] or cej_labels
+    default_cej = cej_labels[:]
 
     filter_product_defaults = _normalize_pill_state("filter_products", products, default_products)
     filter_region_defaults = _normalize_pill_state("filter_regions", regions, default_regions)
