@@ -1462,10 +1462,36 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
     render_comment_table(positive_showcase, key_prefix="positive", source_comments=source_for_cards)
 
 
-def _collect_similar_comments_for_download(source_comments: pd.DataFrame, selected: pd.Series, sentiment_name: str) -> pd.DataFrame:
+def _collect_similar_comments_for_download(
+    source_comments: pd.DataFrame,
+    selected: pd.Series,
+    sentiment_name: str,
+    exclude_id: str | None = None,
+) -> pd.DataFrame:
     if source_comments is None or source_comments.empty:
         return pd.DataFrame()
     working = source_comments.copy()
+    # ✅ 대표로 뽑힌 코멘트는 유사 댓글 샘플에서 제외
+    exclude_id = _safe_text(exclude_id)
+    if exclude_id:
+        if "comment_id" in working.columns:
+            working = working[working["comment_id"].astype(str) != exclude_id].copy()
+        if "source_content_id" in working.columns:
+            working = working[working["source_content_id"].astype(str) != exclude_id].copy()
+        if "opinion_id" in working.columns:
+            working = working[working["opinion_id"].astype(str) != exclude_id].copy()
+    # ✅ 텍스트가 완전히 동일한 경우도 제외(보조 안전장치)
+    selected_text = _safe_text(selected.get(COL_ORIGINAL, selected.get("text_display", "")))
+    selected_raw = _safe_text(selected.get(COL_RAW, selected.get("text_original", "")))
+    if selected_text:
+        for col in [COL_ORIGINAL, "text_display", "original_text", "display_text"]:
+            if col in working.columns:
+                working = working[working[col].astype(str) != selected_text].copy()
+    if selected_raw:
+        for col in [COL_RAW, "text_original", "raw_text"]:
+            if col in working.columns:
+                working = working[working[col].astype(str) != selected_raw].copy()
+
 
     if sentiment_name in {"negative", "positive", "neutral"}:
         if "sentiment_code" in working.columns:
@@ -1652,11 +1678,15 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 with st.expander("원문(Original) 보기"):
                     st.write(original_text)
 
+            selected_exclude_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
+
             similar_comments = _collect_similar_comments_for_download(
                 source_comments if source_comments is not None else pd.DataFrame(),
                 selected,
                 sentiment_name,
+                exclude_id=selected_exclude_id,
             )
+
             if similar_comments.empty:
                 similar_comments = _collect_similar_comments_from_samples(selected)
             if not similar_comments.empty:
