@@ -2011,13 +2011,6 @@ def main() -> None:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
         return
 
-    # ✅ CEJ 단계별 데이터 존재 여부 확인용 (임시 디버그)
-    cej_debug = comments_df[
-        (comments_df["comment_validity"] == "valid") &
-        (comments_df[COL_CEJ].isin(["탐색", "결정", "교체"]))
-    ]
-
-    st.write("탐색/결정/교체 valid 댓글 수:", len(cej_debug))
 
     # =====================================================
     # ✅ Lite / Full 분기 (기존 full은 그대로 유지)
