@@ -1841,14 +1841,23 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
         summary["주요 부정 포인트"] = summary["주요 부정 포인트"].map(_safe_text)
 
     
-    for col in ["\ubd84\uc11d \ub313\uae00 \uc218", "\uc720\ud6a8 \ub313\uae00 \uc218", "\uc81c\uc678 \ub313\uae00 \uc218", "\uae0d\uc815 \ub313\uae00 \uc218", "\ubd80\uc815 \ub313\uae00 \uc218", "\uc911\ub9bd \ub313\uae00 \uc218", "\ubd80\uc815 \ube44\uc728"]:
+    for col in ["분석_전체_댓글_수", "긍정_댓글_수", "부정_댓글_수", "중립_댓글_수", "제외_댓글_수"]:
         if col in summary.columns:
-            summary[col] = summary[col].fillna(0)
+            summary[col] = pd.to_numeric(summary[col], errors="coerce").fillna(0)
     summary[COL_COUNTRY] = summary.get(COL_COUNTRY, summary.get("region", pd.Series(dtype=str)).map(localize_region))
     summary[COL_VIDEO_LINK] = summary.get("video_url", "")
     summary[COL_VIDEO_TITLE] = summary.get("title", "")
     summary["\ubc1c\ud589\uc77c"] = pd.to_datetime(summary.get("published_at"), errors="coerce").dt.strftime("%Y-%m-%d")
-    return summary.sort_values(["\ubd80\uc815 \ub313\uae00 \uc218", "\ubd84\uc11d \ub313\uae00 \uc218", "view_count"], ascending=[False, False, False])
+    # ✅ 새 컬럼명 기준으로 정렬 (없으면 있는 컬럼만으로 정렬)
+    sort_cols = [c for c in ["부정_댓글_수", "분석_전체_댓글_수", "view_count"] if c in summary.columns]
+    if not sort_cols:
+        sort_cols = ["view_count"] if "view_count" in summary.columns else ["video_id"]
+
+    return summary.sort_values(
+        sort_cols,
+        ascending=[False] * len(sort_cols),
+        na_position="last"
+    )
 
 
 
