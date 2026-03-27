@@ -1712,7 +1712,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
 
                     csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     st.download_button(
-                        label="유사 댓글 CSV 다운로드",
+                        label="유사 댓글 CSV 다운로드 (대표 일부)",
                         data=csv_bytes,
                         file_name=f"similar_comments_{key_prefix}_{idx + 1}.csv",
                         mime="text/csv",
@@ -2011,6 +2011,14 @@ def main() -> None:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
         return
 
+    # ✅ CEJ 단계별 데이터 존재 여부 확인용 (임시 디버그)
+    cej_debug = comments_df[
+        (comments_df["comment_validity"] == "valid") &
+        (comments_df[COL_CEJ].isin(["탐색", "결정", "교체"]))
+    ]
+
+st.write("탐색/결정/교체 valid 댓글 수:", len(cej_debug))
+
     # =====================================================
     # ✅ Lite / Full 분기 (기존 full은 그대로 유지)
     # =====================================================
@@ -2048,7 +2056,8 @@ def main() -> None:
     st.caption("Build: 2026-03-27 08:15 / representative-video-restore-pass-2")
     default_products = available_products
     default_regions = regions
-    default_brands = [item for item in brands if item in comments_df.get(COL_BRAND, pd.Series(dtype=str)).dropna().astype(str).unique().tolist()] or brands
+    # default_brands = [item for item in brands if item in comments_df.get(COL_BRAND, pd.Series(dtype=str)).dropna().astype(str).unique().tolist()] or brands
+    default_brands = brands[:] 
     default_sentiments = sentiments
     default_cej = cej_labels[:]
 
@@ -2131,6 +2140,12 @@ def main() -> None:
             value=12,
             step=2,
         )
+        page = st.number_input(
+            "주차 페이지",
+            min_value=1,
+            value=1,
+            step=1,
+        )
 
     
     bundle = compute_filtered_bundle(
@@ -2159,13 +2174,7 @@ def main() -> None:
     all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
     total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
 
-    page = st.number_input(
-    "주차 페이지",
-    min_value=1,
-    value=1,
-    step=1,
-    )
-    
+   
   
     weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
 
