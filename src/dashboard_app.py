@@ -1456,10 +1456,10 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
         return
 
     st.write(f"부정 대표 코멘트 {len(negative_showcase)}건")
-    render_comment_table(negative_showcase, key_prefix="negative", source_comments=source_for_cards, run_uid="main")
+    render_comment_table(negative_showcase, key_prefix="negative", source_comments=source_for_cards)
 
     st.write(f"긍정 대표 코멘트 {len(positive_showcase)}건")
-    render_comment_table(positive_showcase, key_prefix="positive", source_comments=source_for_cards, run_uid="main")
+    render_comment_table(positive_showcase, key_prefix="positive", source_comments=source_for_cards)
 
 
 def _collect_similar_comments_for_download(
@@ -1610,13 +1610,7 @@ def _localized_video_title(title: str) -> str:
     return clean
 
 
-def render_comment_table(
-    comment_showcase: pd.DataFrame,
-    key_prefix: str,
-    source_comments: pd.DataFrame | None = None,
-    run_uid: str = "global",
-) -> None:
-    
+def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source_comments: pd.DataFrame | None = None) -> None:
     if key_prefix == "negative":
         sentiment_name = "negative"
     elif key_prefix == "positive":
@@ -1720,9 +1714,9 @@ def render_comment_table(
                     st.download_button(
                         label="유사 댓글 CSV 다운로드 (대표 일부)",
                         data=csv_bytes,
-                        file_name=f"similar_comments_{key_prefix}_{idx}.csv",
+                        file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
                         mime="text/csv",
-                        key=f"similar_download_{run_uid}_{key_prefix}_{idx}"
+                        key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
                         use_container_width=True,
                     )
 
@@ -1978,7 +1972,6 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
             filtered_comments=video_comments,
             representative_bundles=None,
             opinion_units=None,
-            run_uid=f"video_{video_id}",
         )
 
     with st.container(border=True):
@@ -2485,8 +2478,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
