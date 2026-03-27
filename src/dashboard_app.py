@@ -2132,14 +2132,16 @@ def main() -> None:
     page = st.number_input(
     "주차 페이지",
     min_value=1,
-    max_value=int(total_pages),
     value=1,
     step=1,
     )
     
-    page = min(max(int(page), 1), int(total_pages))
-    
+  
     weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
+
+    # ✅ sidebar 밖 (계산 영역)
+    page = min(max(int(page), 1), int(total_pages))
+
 
     cej_df = data["cej_negative_rate"].copy()
     if not cej_df.empty:
@@ -2336,6 +2338,7 @@ def main() -> None:
             cej_trust_df = build_cej_trust_frame(filtered_comments)
             if not cej_trust_df.empty:
                 st.caption("각 고객경험여정 단계에서 제품·국가·브랜드별 긍정/부정 반응을 바탕으로 고객 신뢰도 지수를 계산했습니다.")
+                st.caption("※ 고객 신뢰도 지수 = ((긍정 댓글 수 − 부정 댓글 수) ÷ (긍정 댓글 수 + 부정 댓글 수)) × 50 + 50")
                 st.dataframe(
                     cej_trust_df[[COL_CEJ, "product", COL_COUNTRY, COL_BRAND, "댓글 수", "긍정 댓글 수", "부정 댓글 수", "고객 신뢰도 지수"]],
                     use_container_width=True,
@@ -2349,6 +2352,8 @@ def main() -> None:
             brand_trust_df = build_brand_trust_frame(filtered_comments)
             if not brand_trust_df.empty:
                 st.caption("브랜드가 언급된 댓글의 양과 긍정/부정 분포를 함께 보며 고객 신뢰도 지수를 참고할 수 있습니다.")
+                st.caption("※ 고객 신뢰도 지수 = ((긍정 댓글 수 − 부정 댓글 수) ÷ (긍정 댓글 수 + 부정 댓글 수)) × 50 + 50")
+
                 st.dataframe(
                     brand_trust_df[[COL_BRAND, "product", COL_COUNTRY, "언급 댓글 수", "긍정 댓글 수", "부정 댓글 수", "언급 비율", "고객 신뢰도 지수"]],
                     use_container_width=True,
