@@ -1850,52 +1850,52 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
     if len(summary_display) > 100:
         st.caption(f"전체 {len(summary_display):,}개 영상 중 상위 100개만 먼저 표시합니다.")
 
-with st.container(border=True):
-    st.markdown("#### 영상당 부정 댓글 밀도")
+    with st.container(border=True):
+        st.markdown("#### 영상당 부정 댓글 밀도")
 
-    if density_df.empty:
-        st.info("표시할 영상 밀도 데이터가 없습니다.")
-        edited = pd.DataFrame()
-    else:
-        density_display = pd.DataFrame({
-            "video_id": density_df.get("video_id"),
-            "product": density_df.get("product", pd.Series("", index=density_df.index)),
-            COL_COUNTRY: density_df.get(
-                COL_COUNTRY,
-                density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region),
-            ),
-            COL_VIDEO_TITLE: density_df.get(
-                "title",
-                density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index)),
-            ).map(_localized_video_title),
-            "부정 댓글 수": density_df.get("negative_comments", pd.Series(0, index=density_df.index)),
-            "분석 댓글 수": density_df.get("total_comments", pd.Series(0, index=density_df.index)),
-            "부정 밀도": density_df.get("negative_density", pd.Series(0.0, index=density_df.index)),
-            COL_VIDEO_LINK: density_df.get(
-                "video_url",
-                density_df.get(COL_VIDEO_LINK, pd.Series("", index=density_df.index)),
-            ),
-        })
-
-        table_df = density_display.head(100).copy()
-        table_df.insert(0, "선택", False)
-
-        edited = st.data_editor(
-            table_df,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="fixed",
-            column_config={
-                "선택": st.column_config.CheckboxColumn(
-                    "선택", help="체크하면 아래에 해당 영상 상세 분석이 표시됩니다."
+        if density_df.empty:
+            st.info("표시할 영상 밀도 데이터가 없습니다.")
+            edited = pd.DataFrame()
+        else:
+            density_display = pd.DataFrame({
+                "video_id": density_df.get("video_id"),
+                "product": density_df.get("product", pd.Series("", index=density_df.index)),
+                COL_COUNTRY: density_df.get(
+                    COL_COUNTRY,
+                    density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region),
                 ),
-                COL_VIDEO_TITLE: st.column_config.TextColumn("영상 제목", width="large"),
-            },
-            key="density_table_editor",
-        )
+                COL_VIDEO_TITLE: density_df.get(
+                    "title",
+                    density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index)),
+                ).map(_localized_video_title),
+                "부정 댓글 수": density_df.get("negative_comments", pd.Series(0, index=density_df.index)),
+                "분석 댓글 수": density_df.get("total_comments", pd.Series(0, index=density_df.index)),
+                "부정 밀도": density_df.get("negative_density", pd.Series(0.0, index=density_df.index)),
+                COL_VIDEO_LINK: density_df.get(
+                    "video_url",
+                    density_df.get(COL_VIDEO_LINK, pd.Series("", index=density_df.index)),
+                ),
+            })
 
-        if len(density_display) > 100:
-            st.caption(f"전체 {len(density_display):,}개 중 상위 100개만 먼저 표시합니다.")
+            table_df = density_display.head(100).copy()
+            table_df.insert(0, "선택", False)
+
+            edited = st.data_editor(
+                table_df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                column_config={
+                    "선택": st.column_config.CheckboxColumn(
+                        "선택", help="체크하면 아래에 해당 영상 상세 분석이 표시됩니다."
+                    ),
+                    COL_VIDEO_TITLE: st.column_config.TextColumn("영상 제목", width="large"),
+                },
+                key="density_table_editor",
+            )
+
+            if len(density_display) > 100:
+                st.caption(f"전체 {len(density_display):,}개 중 상위 100개만 먼저 표시합니다.")
 
     # ✅ 표에서 선택된 행 → 바로 상세 분석
     if density_df.empty:
