@@ -1850,44 +1850,70 @@ def render_video_summary_page(filtered_comments: pd.DataFrame, filtered_videos: 
     if len(summary_display) > 100:
         st.caption(f"전체 {len(summary_display):,}개 영상 중 상위 100개만 먼저 표시합니다.")
 
-    with st.container(border=True):
-        st.markdown("#### 영상당 부정 댓글 밀도")
-        if not density_df.empty:
-            density_display = pd.DataFrame({
-                "video_id": density_df.get("video_id"),  # ✅ 반드시 추가
-                "product": density_df.get("product", pd.Series("", index=density_df.index)),
-                COL_COUNTRY: density_df.get(COL_COUNTRY, density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region)),
-                COL_VIDEO_TITLE: density_df.get("title", density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index))).map(_localized_video_title),
-                "부정 댓글 수": density_df.get("negative_comments", pd.Series(0, index=density_df.index)),
-                "분석 댓글 수": density_df.get("total_comments", pd.Series(0, index=density_df.index)),
-                "부정 밀도": density_df.get("negative_density", pd.Series(0.0, index=density_df.index)),
-                COL_VIDEO_LINK: density_df.get("video_url", density_df.get(COL_VIDEO_LINK, pd.Series("", index=density_df.index))),
-            })
-            st.dataframe(density_display.head(100), use_container_width=True, hide_index=True)
-            if len(density_display) > 100:
-                st.caption(f"전체 {len(density_display):,}개 중 상위 100개만 먼저 표시합니다.")
-        else:
-            st.info("표시할 영상 밀도 데이터가 없습니다.")
+with st.container(border=True):
+    st.markdown("#### 영상당 부정 댓글 밀도")
 
-    
-    # ✅ ✅ ✅ 여기!
-    if density_display.empty:
-        st.info("부정 밀도 데이터가 없어 영상 상세 분석 선택을 표시하지 않습니다.")
+    if density_df.empty:
+        st.info("표시할 영상 밀도 데이터가 없습니다.")
+        edited = pd.DataFrame()
+    else:
+        density_display = pd.DataFrame({
+            "video_id": density_df.get("video_id"),
+            "product": density_df.get("product", pd.Series("", index=density_df.index)),
+            COL_COUNTRY: density_df.get(
+                COL_COUNTRY,
+                density_df.get("region", pd.Series("", index=density_df.index)).map(localize_region),
+            ),
+            COL_VIDEO_TITLE: density_df.get(
+                "title",
+                density_df.get(COL_VIDEO_TITLE, pd.Series("", index=density_df.index)),
+            ).map(_localized_video_title),
+            "부정 댓글 수": density_df.get("negative_comments", pd.Series(0, index=density_df.index)),
+            "분석 댓글 수": density_df.get("total_comments", pd.Series(0, index=density_df.index)),
+            "부정 밀도": density_df.get("negative_density", pd.Series(0.0, index=density_df.index)),
+            COL_VIDEO_LINK: density_df.get(
+                "video_url",
+                density_df.get(COL_VIDEO_LINK, pd.Series("", index=density_df.index)),
+            ),
+        })
 
+        table_df = density_display.head(100).copy()
+        table_df.insert(0, "선택", False)
 
-    # ✅ [4번 수정] 영상당 부정 댓글 밀도 리스트 기준으로 상세 분석 연결
-    if not density_display.empty:
-        selected_video_id = st.selectbox(
-            "부정 밀도 기준 영상 상세 분석",
-            options=density_display["video_id"],
-            format_func=lambda vid: density_display.loc[
-                density_display["video_id"] == vid, COL_VIDEO_TITLE
-            ].iloc[0],
-            key="video_density_selector",
+        edited = st.data_editor(
+            table_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            column_config={
+                "선택": st.column_config.CheckboxColumn(
+                    "선택", help="체크하면 아래에 해당 영상 상세 분석이 표시됩니다."
+                ),
+                COL_VIDEO_TITLE: st.column_config.TextColumn("영상 제목", width="large"),
+            },
+            key="density_table_editor",
         )
 
-        selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
-        render_video_detail_page(filtered_comments, selected_row)
+        if len(density_display) > 100:
+            st.caption(f"전체 {len(density_display):,}개 중 상위 100개만 먼저 표시합니다.")
+
+    # ✅ 표에서 선택된 행 → 바로 상세 분석
+    if density_df.empty:
+        st.info("부정 밀도 데이터가 없어 영상 상세 분석 선택을 표시하지 않습니다.")
+    else:
+        checked = (
+            edited[edited["선택"] == True]
+            if (not edited.empty and "선택" in edited.columns)
+            else pd.DataFrame()
+        )
+
+        if not checked.empty:
+            selected_video_id = checked.iloc[0]["video_id"]
+            selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
+            render_video_detail_page(filtered_comments, selected_row)
+        else:
+            st.caption("👆 위 표에서 ‘선택’을 체크하면 아래에 상세 분석이 표시됩니다.")
+
 
 def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd.Series) -> None:
     video_id = selected_video.get("video_id")
