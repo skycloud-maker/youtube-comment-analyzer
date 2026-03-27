@@ -1714,9 +1714,9 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     st.download_button(
                         label="유사 댓글 CSV 다운로드 (대표 일부)",
                         data=csv_bytes,
-                        file_name=f"similar_comments_{key_prefix}_{idx + 1}.csv",
+                        file_name=f"similar_comments_{key_prefix}_{idx}.csv",
                         mime="text/csv",
-                        key=f"similar_download_{key_prefix}_{idx}",
+                        key=f"similar_download_{key_prefix}_{idx}_{selected_video_id}",
                         use_container_width=True,
                     )
 
