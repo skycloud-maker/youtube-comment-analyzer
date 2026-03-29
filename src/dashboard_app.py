@@ -1694,6 +1694,13 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             else:
                 working_pool = pool.copy()
 
+                # ✅ [추가] 중복 컬럼 방어: 중복이 있으면 df['col']이 Series가 아니라 DataFrame(2D)이 될 수 있음
+                dup_cols = working_pool.columns[working_pool.columns.duplicated()].tolist()
+                if dup_cols and st.session_state.get("debug_mode", False):
+                    # UI에만 가볍게 표시(원인 추적 단서). 원치 않으면 st.caption 줄 제거 가능
+                    st.caption(f"⚠️ 데이터 경고: 중복 컬럼 감지 {dup_cols} → 첫 컬럼 기준으로 정리했습니다.")
+                    working_pool = working_pool.loc[:, ~working_pool.columns.duplicated()].copy()
+
                 # 1) 영상 필터: video_id가 있으면 video_id로, 없으면 링크로
                 if video_id and "video_id" in working_pool.columns:
                     working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
@@ -1702,7 +1709,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                         working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
                     elif "video_url" in working_pool.columns:
                         working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
-    
+
                 # 2) 분석 대상(valid)만
                 if "comment_validity" in working_pool.columns:
                     working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
@@ -1713,7 +1720,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 elif "sentiment_code" in working_pool.columns:
                     working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
 
-                # 4) 대표 코멘트 제외 (comment_id / source_content_id / opinion_id 중 있는 걸로)
+                # 4) 대표 코멘트 제외
                 if rep_id:
                     if "comment_id" in working_pool.columns:
                         working_pool = working_pool[working_pool["comment_id"].astype(str) != rep_id].copy()
@@ -1722,8 +1729,6 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     if "opinion_id" in working_pool.columns:
                         working_pool = working_pool[working_pool["opinion_id"].astype(str) != rep_id].copy()
 
-                # ✅ 유사 댓글(=대표 제외 나머지 전부) 테이블 생성
-                # (번역은 대량 처리 시 비용이 커서 CSV에는 원문 중심으로 제공)
                 def _get_text(row):
                     return _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", row.get("display_text", "")))))
 
@@ -1736,41 +1741,32 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 def _get_pii(row):
                     return "있음" if _safe_text(row.get("pii_flag", "N")) == "Y" else "없음"
 
+                # ✅ [추가] comment_id가 2D(DataFrame)로 잡혀도 1D(Series)로 강제
+                id_obj = working_pool.get("comment_id", None)
+                if isinstance(id_obj, pd.DataFrame):
+                    id_obj = id_obj.iloc[:, 0]
+                if id_obj is None:
+                    id_obj = working_pool.get("opinion_id", pd.Series("", index=working_pool.index))
+                if isinstance(id_obj, pd.DataFrame):
+                    id_obj = id_obj.iloc[:, 0]
+                if not isinstance(id_obj, pd.Series):
+                    id_obj = pd.Series(id_obj, index=working_pool.index)
+                id_series = id_obj.fillna("").astype(str)
 
-                # 빈 원문 제거 + 중복 제거
+                # ✅ 유사 댓글 테이블 생성 (여기서 ValueError:2 방지)
                 similar_comments = pd.DataFrame({
-                    "comment_id": working_pool.get("comment_id", working_pool.get("opinion_id", pd.Series("", index=working_pool.index))).astype(str),
+                    "comment_id": id_series,
                     "원문": working_pool.apply(_get_text, axis=1),
                     "좋아요 수": working_pool.apply(_get_likes, axis=1),
                     "PII": working_pool.apply(_get_pii, axis=1),
                     "작성일시": working_pool.apply(_get_written_at, axis=1),
                 })
 
-                
-                similar_comments = similar_comments[
-                    similar_comments["원문"].str.strip().ne("")
-                ].drop_duplicates(subset=["comment_id"]).copy()
-
-
-            # ✅ UI: 유사 댓글(대표 제외 나머지 전체) 표시/다운로드
-            if similar_comments.empty:
-                st.info("대표 코멘트를 제외하면 동일 감성의 유사 댓글이 없습니다.")
-            else:
-                with st.expander(f"유사 댓글 보기 (대표 제외 잔여 {len(similar_comments):,}건)"):
-                    preview_rows = similar_comments.head(5)
-                    for _, sample in preview_rows.iterrows():
-                        st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
-                        st.caption(f"좋아요 {sample.get('좋아요 수', 0)} · PII {sample.get('PII', '없음')} · {_safe_text(sample.get('작성일시', ''))}")
-
-                    csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                    st.download_button(
-                        label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
-                        data=csv_bytes,
-                        file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
-                        mime="text/csv",
-                        key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
-                        use_container_width=True,
-                    )
+                similar_comments = (
+                    similar_comments[similar_comments["원문"].str.strip().ne("")]
+                    .drop_duplicates(subset=["comment_id"])
+                    .copy()
+                )
 
 
 def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> pd.DataFrame:
