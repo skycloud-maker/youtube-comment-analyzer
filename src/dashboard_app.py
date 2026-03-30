@@ -20,7 +20,6 @@ except Exception:
 import altair as alt
 import pandas as pd
 import streamlit as st
-import numpy as np
 
 from src.analytics.comment_analysis import analyze_comment_with_context
 from src.analytics.keywords import build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
@@ -311,12 +310,6 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     score_seed = pd.to_numeric(candidate_pool.get("sentiment_score", pd.Series(0.0, index=candidate_pool.index)), errors="coerce").fillna(0.0).abs()
     candidate_pool["candidate_seed"] = (likes_seed * 1.8) + (length_seed * 0.05) + (score_seed * 80)
     working = candidate_pool.sort_values(["candidate_seed", "like_count"], ascending=[False, False]).head(max(limit * 20, 120)).copy()
-    # ✅ [G0] 대표 후보 자격: 노이즈/무의미 댓글 제외
-    base_text = working.get("text_display", working.get("text_original", pd.Series("", index=working.index))).fillna("").astype(str)
-    working = working[(~base_text.map(_is_noise_comment))].copy()
-    if working.empty:
-        return pd.DataFrame()
-
 
     source_original = working.get("text_original", pd.Series("", index=working.index)).fillna("")
     source_display = working.get("text_display", source_original).fillna(source_original)
@@ -373,20 +366,6 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
 
     analysis_df = working.apply(_reanalyze, axis=1)
     working = pd.concat([working.reset_index(drop=True), analysis_df.reset_index(drop=True)], axis=1)
-    # ✅ [G1,G2] 제품 기준 감성/CEJ 보정(대표 선정에 쓰이는 라벨)
-    text_for_rule = working.get(COL_ORIGINAL, pd.Series("", index=working.index)).fillna("").astype(str)
-
-    # sentiment_label 또는 display_sentiment 둘 중 존재하는 컬럼 기준으로 보정
-    if "display_sentiment" in working.columns:
-        working["display_sentiment"] = [
-            _override_sentiment(t, s) for t, s in zip(text_for_rule, working["display_sentiment"].astype(str))
-        ]
-
-    # CEJ 라벨 보정 (COL_CEJ는 한국어 단계)
-    if COL_CEJ in working.columns:
-        working[COL_CEJ] = [
-            _override_cej(t, c) for t, c in zip(text_for_rule, working[COL_CEJ].astype(str))
-        ]
 
     if sentiment:
         working = working[working["display_sentiment"] == sentiment].copy()
@@ -591,23 +570,6 @@ def summarize_comment_reason(selected: pd.Series, sentiment_name: str) -> str:
     return f"\uc911\ub9bd \ud3ec\uc778\ud2b8: {topic} \ub2e8\uacc4\uc5d0\uc11c {signal_text} \uad00\ub828 \uc758\uacac\uc774 \ud568\uaed8 \uc5b8\uae09\ub429\ub2c8\ub2e4."
 
 
-def _as_1d_series(obj, index) -> pd.Series:
-    """obj가 어떤 형태로 오더라도 길이=len(index)인 1D Series로 강제"""
-    if obj is None:
-        return pd.Series("", index=index)
-
-    if isinstance(obj, pd.DataFrame):
-        obj = obj.iloc[:, 0]
-
-    if isinstance(obj, pd.Series):
-        return obj.reindex(index)
-
-    if isinstance(obj, np.ndarray):
-        if obj.ndim != 1:
-            obj = obj.ravel()
-        return pd.Series(obj, index=index)
-
-    return pd.Series(obj, index=index)
 
 
 def _safe_text(value: Any) -> str:
@@ -624,32 +586,6 @@ def _safe_text(value: Any) -> str:
     return cleaned
 
 
-def _is_noise_comment(text: str) -> bool:
-    t = _safe_text(text)
-    if not t:
-        return True
-
-    lowered = t.lower()
-    words = [w for w in re.split(r"\s+", lowered) if w]
-
-    # 밈/나열 패턴: 단어 수가 매우 많고(>=50) 제품/행동 신호가 거의 없으면 노이즈
-    product_action_hits = sum(k in lowered for k in [
-        "broke","broken","stop","stopped","not cooling","won't","won’t",
-        "repair","fixed","reset","recalibration","warranty","service",
-        "buy","bought","purchase","install","delivery","return",
-        "dryer","washer","fridge","refrigerator","freezer","dishwasher","compressor"
-    ])
-    if len(words) >= 50 and product_action_hits == 0:
-        return True
-
-    # 알파벳/숫자 대비 특수문자/이상 패턴이 과도하면 노이즈(긴 나열 방지)
-    alpha_ratio = sum(ch.isalnum() for ch in t) / max(len(t), 1)
-    if len(t) > 250 and alpha_ratio < 0.55:
-        return True
-
-    return False
-    
-
 def _looks_garbled(text_value: str) -> bool:
     text_value = _safe_text(text_value)
     if not text_value:
@@ -662,52 +598,6 @@ def _looks_garbled(text_value: str) -> bool:
     if text_value.count("?") >= 3 and not any(ch.isalpha() for ch in text_value):
         return True
     return False
-
-
-def _override_sentiment(product_text: str, current: str) -> str:
-    """current: 'positive'|'negative'|'neutral'"""
-    t = _safe_text(product_text).lower()
-    if not t:
-        return current
-
-    strong_neg = any(k in t for k in [
-        "disgraceful","hate","avoid at all costs","unreliable","broken","broke",
-        "not cooling","won't cool","won’t cool","doesn't work","doesn’t work",
-        "grinding","fault","failing","worst","terrible"
-    ])
-    strong_pos = any(k in t for k in [
-        "faultless","works great","working great","still working","runs like new",
-        "buy again","would buy again","very good","love it","highly recommend"
-    ])
-
-    # “영상 칭찬”은 제품 긍정으로 보지 않도록(제품 문제 단서가 있으면 부정 우선)
-    creator_praise_only = (("thanks" in t or "you're the best" in t or "bless you" in t) and not strong_pos)
-    if creator_praise_only and any(k in t for k in ["not cooling","broke","broken","grinding","won't","won’t","doesn't work","doesn’t work"]):
-        return "negative"
-
-    # 강한 단서가 있으면 덮어씀
-    if strong_neg and not strong_pos:
-        return "negative"
-    if strong_pos and not strong_neg:
-        return "positive"
-
-    return current
-
-def _override_cej(product_text: str, current_cej: str) -> str:
-    t = _safe_text(product_text).lower()
-    if not t:
-        return current_cej
-
-    # 관리/교체 신호
-    if any(k in t for k in ["repair","service","warranty","reset","recalibration","fixed","broke","broken","not cooling","won't","won’t","grinding","failing"]):
-        return "관리"
-
-    # 탐색/결정 신호
-    if any(k in t for k in ["worth","review","compare","recommend","buy","bought","purchase","avoid at all costs","life expectancy"]):
-        # 구매/결정은 조직에 따라 라벨이 다르니, 일단 탐색/결정 계열로 보내는 게 안정적
-        return "탐색" if current_cej in ["인지","기타",""] else current_cej
-
-    return current_cej
 
 
 def _is_long_text(text_value: str, threshold: int = 260) -> bool:
@@ -1282,10 +1172,6 @@ def _build_bundle_showcase(filtered_comments: pd.DataFrame, sentiment: str, limi
         return candidate_pool
 
     base_pool = filtered_comments.copy()
-    # ✅ [G4] 유사 의견(클러스터) 계산에서 노이즈 제외
-    base_text = base_pool.get(COL_ORIGINAL, base_pool.get("text_display", pd.Series("", index=base_pool.index))).fillna("").astype(str)
-    base_pool = base_pool[(~base_text.map(_is_noise_comment))].copy()
-    
     validity = base_pool.get("comment_validity", pd.Series("valid", index=base_pool.index))
     base_pool = base_pool[validity.eq("valid")].copy()
     if sentiment:
@@ -1654,28 +1540,8 @@ def _collect_similar_comments_for_download(
         elif COL_BRAND in working.columns:
             working = working[working[COL_BRAND].astype(str).eq(brand_value)].copy()
 
-    # ✅ [FIX] 너무 엄격한 필터로 유사댓글이 0건이 되는 경우 → fallback
     if working.empty:
-        relaxed = source_comments.copy()
-
-        # 대표 댓글 제외는 유지
-        if exclude_id:
-            for col in ["comment_id", "source_content_id", "opinion_id"]:
-                if col in relaxed.columns:
-                    relaxed = relaxed[relaxed[col].astype(str) != exclude_id]
-
-        # ✅ 감성만 유지 (CEJ / topic / product / brand 조건 전부 해제)
-        if sentiment_name in {"negative", "positive", "neutral"}:
-            if "sentiment_label" in relaxed.columns:
-                relaxed = relaxed[relaxed["sentiment_label"].astype(str).eq(sentiment_name)]
-            elif "sentiment_code" in relaxed.columns:
-                relaxed = relaxed[relaxed["sentiment_code"].astype(str).eq(sentiment_name)]
-
-        # ✅ 최소 품질 필터 (빈 텍스트 제거)
-        text_col = COL_ORIGINAL if COL_ORIGINAL in relaxed.columns else "text_display"
-        relaxed = relaxed[relaxed[text_col].fillna("").str.strip().ne("")]
-
-        working = relaxed.copy()
+        return working
 
     like_col = COL_LIKES if COL_LIKES in working.columns else ("likes_count" if "likes_count" in working.columns else "like_count")
     if like_col not in working.columns:
@@ -1826,44 +1692,85 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             if pool.empty:
                 similar_comments = pd.DataFrame()
             else:
-                # ✅ 대표 코멘트 ID (있으면) - 유사댓글에서 제외하기 위함
-                rep_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
+                working_pool = pool.copy()
 
-                # ✅ "같은 영상(video_id/링크)" 강제 필터를 버리고,
-                # 이미 구현된 유사댓글 수집 함수(제품/CEJ/브랜드/감성 중심)를 사용
-                similar_comments = _collect_similar_comments_for_download(
-                    source_comments=pool,
-                    selected=working_selected,   # 카드 보강된 row 기준(중요)
-                    sentiment_name=sentiment_name,
-                    exclude_id=rep_id,
-                )
-                # ✅ [FIX] 유사댓글 UI 출력(이 부분이 누락되어 리스트가 안 보였음)
-                if similar_comments is None or similar_comments.empty:
-                    st.info("대표 코멘트를 제외하면 유사 댓글이 없습니다. (필터 조건이 엄격할 수 있음)")
-                else:
-                    # cluster_size(추정) vs 실제 표시 가능한 유사댓글 수(리스트) 함께 보여주기
-                    st.caption(f"유사 의견(클러스터 추정): {cluster_size:,}개 / 유사 댓글(표시 가능): {len(similar_comments):,}건")
+                # 1) 영상 필터: video_id가 있으면 video_id로, 없으면 링크로
+                if video_id and "video_id" in working_pool.columns:
+                    working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
+                elif video_link_for_filter:
+                    if COL_VIDEO_LINK in working_pool.columns:
+                        working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
+                    elif "video_url" in working_pool.columns:
+                        working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
+    
+                # 2) 분석 대상(valid)만
+                if "comment_validity" in working_pool.columns:
+                    working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
 
-                    with st.expander(f"유사 댓글 보기 (대표 제외 {len(similar_comments):,}건)"):
-                        preview_rows = similar_comments.head(8)
-                        for _, sample in preview_rows.iterrows():
-                            st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
-                            st.caption(
-                                f"좋아요 {sample.get('좋아요 수', 0)} · "
-                                f"PII {sample.get('PII', '없음')} · "
-                                f"{_safe_text(sample.get('작성일시', ''))}"
-                            )
+                # 3) 같은 감성만
+                if "sentiment_label" in working_pool.columns:
+                    working_pool = working_pool[working_pool["sentiment_label"].astype(str) == sentiment_name].copy()
+                elif "sentiment_code" in working_pool.columns:
+                    working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
 
-                        csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                        st.download_button(
-                            label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
-                            data=csv_bytes,
-                            file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
-                            mime="text/csv",
-                            key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
-                            use_container_width=True,
-                        )
-                st.caption(f"[DEBUG] 유사댓글 최종 수: {len(similar_comments)}")
+                # 4) 대표 코멘트 제외 (comment_id / source_content_id / opinion_id 중 있는 걸로)
+                if rep_id:
+                    if "comment_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["comment_id"].astype(str) != rep_id].copy()
+                    if "source_content_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["source_content_id"].astype(str) != rep_id].copy()
+                    if "opinion_id" in working_pool.columns:
+                        working_pool = working_pool[working_pool["opinion_id"].astype(str) != rep_id].copy()
+
+                # ✅ 유사 댓글(=대표 제외 나머지 전부) 테이블 생성
+                # (번역은 대량 처리 시 비용이 커서 CSV에는 원문 중심으로 제공)
+                def _get_text(row):
+                    return _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", row.get("display_text", "")))))
+
+                def _get_likes(row):
+                    return int(pd.to_numeric(row.get(COL_LIKES, row.get("like_count", row.get("likes_count", 0))), errors="coerce") or 0)
+
+                def _get_written_at(row):
+                    return _safe_text(row.get(COL_WRITTEN_AT, row.get("published_at", "")))
+
+                def _get_pii(row):
+                    return "있음" if _safe_text(row.get("pii_flag", "N")) == "Y" else "없음"
+
+
+                # 빈 원문 제거 + 중복 제거
+                similar_comments = pd.DataFrame({
+                    "comment_id": working_pool.get("comment_id", working_pool.get("opinion_id", pd.Series("", index=working_pool.index))).astype(str),
+                    "원문": working_pool.apply(_get_text, axis=1),
+                    "좋아요 수": working_pool.apply(_get_likes, axis=1),
+                    "PII": working_pool.apply(_get_pii, axis=1),
+                    "작성일시": working_pool.apply(_get_written_at, axis=1),
+                })
+
+                
+                similar_comments = similar_comments[
+                    similar_comments["원문"].str.strip().ne("")
+                ].drop_duplicates(subset=["comment_id"]).copy()
+
+
+            # ✅ UI: 유사 댓글(대표 제외 나머지 전체) 표시/다운로드
+            if similar_comments.empty:
+                st.info("대표 코멘트를 제외하면 동일 감성의 유사 댓글이 없습니다.")
+            else:
+                with st.expander(f"유사 댓글 보기 (대표 제외 잔여 {len(similar_comments):,}건)"):
+                    preview_rows = similar_comments.head(5)
+                    for _, sample in preview_rows.iterrows():
+                        st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
+                        st.caption(f"좋아요 {sample.get('좋아요 수', 0)} · PII {sample.get('PII', '없음')} · {_safe_text(sample.get('작성일시', ''))}")
+
+                    csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button(
+                        label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
+                        data=csv_bytes,
+                        file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
+                        mime="text/csv",
+                        key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
+                        use_container_width=True,
+                    )
 
 
 def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> pd.DataFrame:
@@ -1972,10 +1879,9 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         f"영상 요약 계산 결과: 댓글 {len(all_video_comments):,}건 / "
         f"영상 {len(filtered_videos):,}건 / 요약 {len(summary):,}건"
     )
-    if summary.empty or "분석_전체_댓글_수" not in summary.columns:
-        st.info("해당 키워드로 검색된 댓글이 없습니다.")
+    if summary.empty:
+        st.info("표시할 영상 요약 데이터가 없습니다.")
         return
-
 
     # ✅ 상단 카드(전체 기준)
     k1, k2, k3 = st.columns(3)
@@ -1983,22 +1889,10 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         render_card("분석 영상 수", f"{len(summary):,}")
     with k2:
         # 전체 댓글 기준 합계
-        if summary.empty or "분석_전체_댓글_수" not in summary.columns:
-            total_all = 0
-        else:
-            total_all = int(
-                pd.to_numeric(summary["분석_전체_댓글_수"], errors="coerce")
-                .fillna(0)
-                .sum()
-            )
+        total_all = int(pd.to_numeric(summary.get("분석_전체_댓글_수", 0), errors="coerce").fillna(0).sum())
         render_card("전체 댓글(합)", f"{total_all:,}")
     with k3:
-        if summary.empty:
-            top_video = "-"
-        else:
-            top_video = _localized_video_title(
-                _safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-"))
-            )
+        top_video = _localized_video_title(_safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-")))
         render_card("최상위 이슈 영상", str(top_video)[:28] or "-")
 
     # ✅ 상단 리스트(전체 분포)
@@ -2370,11 +2264,6 @@ def main() -> None:
                 "",
                 placeholder="예: 소음, 냉각, warranty",
             )
-            # ✅ 키워드 검색어 정규화 (공란 Enter 대응)
-            keyword_query = (keyword_query or "").strip()
-            if keyword_query == "":
-                keyword_query = None
-                
         weeks_per_view = st.slider(
             "차트 한 화면 주차 수",
             min_value=4,
@@ -2642,11 +2531,7 @@ def main() -> None:
                 st.info("현재 조건에서 표시할 브랜드 신뢰도 데이터가 없습니다.")
 
         with st.container(border=True):
-            render_representative_comments(
-                filtered_comments,
-                bundle.get("representative_bundles", pd.DataFrame()),
-                bundle.get("opinion_units", pd.DataFrame()),
-            )
+            render_representative_comments(bundle.get("representative_comments", filtered_comments), bundle.get("representative_bundles", pd.DataFrame()), bundle.get("opinion_units", pd.DataFrame()))
 
     with tab_videos:
         render_video_summary_page(all_comments, filtered_videos)
