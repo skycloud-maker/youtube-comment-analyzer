@@ -1654,8 +1654,28 @@ def _collect_similar_comments_for_download(
         elif COL_BRAND in working.columns:
             working = working[working[COL_BRAND].astype(str).eq(brand_value)].copy()
 
+    # ✅ [FIX] 너무 엄격한 필터로 유사댓글이 0건이 되는 경우 → fallback
     if working.empty:
-        return working
+        relaxed = source_comments.copy()
+
+        # 대표 댓글 제외는 유지
+        if exclude_id:
+            for col in ["comment_id", "source_content_id", "opinion_id"]:
+                if col in relaxed.columns:
+                    relaxed = relaxed[relaxed[col].astype(str) != exclude_id]
+
+        # ✅ 감성만 유지 (CEJ / topic / product / brand 조건 전부 해제)
+        if sentiment_name in {"negative", "positive", "neutral"}:
+            if "sentiment_label" in relaxed.columns:
+                relaxed = relaxed[relaxed["sentiment_label"].astype(str).eq(sentiment_name)]
+            elif "sentiment_code" in relaxed.columns:
+                relaxed = relaxed[relaxed["sentiment_code"].astype(str).eq(sentiment_name)]
+
+        # ✅ 최소 품질 필터 (빈 텍스트 제거)
+        text_col = COL_ORIGINAL if COL_ORIGINAL in relaxed.columns else "text_display"
+        relaxed = relaxed[relaxed[text_col].fillna("").str.strip().ne("")]
+
+        working = relaxed.copy()
 
     like_col = COL_LIKES if COL_LIKES in working.columns else ("likes_count" if "likes_count" in working.columns else "like_count")
     if like_col not in working.columns:
@@ -1817,7 +1837,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     sentiment_name=sentiment_name,
                     exclude_id=rep_id,
                 )
-
+                st.caption(f"[DEBUG] 유사댓글 최종 수: {len(similar_comments)}")
 
 
 def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> pd.DataFrame:
