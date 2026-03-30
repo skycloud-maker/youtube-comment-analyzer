@@ -1905,9 +1905,10 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         f"영상 요약 계산 결과: 댓글 {len(all_video_comments):,}건 / "
         f"영상 {len(filtered_videos):,}건 / 요약 {len(summary):,}건"
     )
-    if summary.empty:
-        st.info("표시할 영상 요약 데이터가 없습니다.")
+    if summary.empty or "분석_전체_댓글_수" not in summary.columns:
+        st.info("해당 키워드로 검색된 댓글이 없습니다.")
         return
+
 
     # ✅ 상단 카드(전체 기준)
     k1, k2, k3 = st.columns(3)
@@ -2302,6 +2303,11 @@ def main() -> None:
                 "",
                 placeholder="예: 소음, 냉각, warranty",
             )
+            # ✅ 키워드 검색어 정규화 (공란 Enter 대응)
+            keyword_query = (keyword_query or "").strip()
+            if keyword_query == "":
+                keyword_query = None
+                
         weeks_per_view = st.slider(
             "차트 한 화면 주차 수",
             min_value=4,
