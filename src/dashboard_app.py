@@ -1837,6 +1837,32 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     sentiment_name=sentiment_name,
                     exclude_id=rep_id,
                 )
+                # ✅ [FIX] 유사댓글 UI 출력(이 부분이 누락되어 리스트가 안 보였음)
+                if similar_comments is None or similar_comments.empty:
+                    st.info("대표 코멘트를 제외하면 유사 댓글이 없습니다. (필터 조건이 엄격할 수 있음)")
+                else:
+                    # cluster_size(추정) vs 실제 표시 가능한 유사댓글 수(리스트) 함께 보여주기
+                    st.caption(f"유사 의견(클러스터 추정): {cluster_size:,}개 / 유사 댓글(표시 가능): {len(similar_comments):,}건")
+
+                    with st.expander(f"유사 댓글 보기 (대표 제외 {len(similar_comments):,}건)"):
+                        preview_rows = similar_comments.head(8)
+                        for _, sample in preview_rows.iterrows():
+                            st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
+                            st.caption(
+                                f"좋아요 {sample.get('좋아요 수', 0)} · "
+                                f"PII {sample.get('PII', '없음')} · "
+                                f"{_safe_text(sample.get('작성일시', ''))}"
+                            )
+
+                        csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                        st.download_button(
+                            label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
+                            data=csv_bytes,
+                            file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
+                            mime="text/csv",
+                            key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
+                            use_container_width=True,
+                        )
                 st.caption(f"[DEBUG] 유사댓글 최종 수: {len(similar_comments)}")
 
 
