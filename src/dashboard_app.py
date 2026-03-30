@@ -20,6 +20,7 @@ except Exception:
 import altair as alt
 import pandas as pd
 import streamlit as st
+import numpy as np
 
 from src.analytics.comment_analysis import analyze_comment_with_context
 from src.analytics.keywords import build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
@@ -570,6 +571,23 @@ def summarize_comment_reason(selected: pd.Series, sentiment_name: str) -> str:
     return f"\uc911\ub9bd \ud3ec\uc778\ud2b8: {topic} \ub2e8\uacc4\uc5d0\uc11c {signal_text} \uad00\ub828 \uc758\uacac\uc774 \ud568\uaed8 \uc5b8\uae09\ub429\ub2c8\ub2e4."
 
 
+def _as_1d_series(obj, index) -> pd.Series:
+    """obj가 어떤 형태로 오더라도 길이=len(index)인 1D Series로 강제"""
+    if obj is None:
+        return pd.Series("", index=index)
+
+    if isinstance(obj, pd.DataFrame):
+        obj = obj.iloc[:, 0]
+
+    if isinstance(obj, pd.Series):
+        return obj.reindex(index)
+
+    if isinstance(obj, np.ndarray):
+        if obj.ndim != 1:
+            obj = obj.ravel()
+        return pd.Series(obj, index=index)
+
+    return pd.Series(obj, index=index)
 
 
 def _safe_text(value: Any) -> str:
@@ -1696,9 +1714,10 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
 
                 # ✅ [추가] 중복 컬럼 방어: 중복이 있으면 df['col']이 Series가 아니라 DataFrame(2D)이 될 수 있음
                 dup_cols = working_pool.columns[working_pool.columns.duplicated()].tolist()
-                if dup_cols and st.session_state.get("debug_mode", False):
-                    # UI에만 가볍게 표시(원인 추적 단서). 원치 않으면 st.caption 줄 제거 가능
-                    st.caption(f"⚠️ 데이터 경고: 중복 컬럼 감지 {dup_cols} → 첫 컬럼 기준으로 정리했습니다.")
+                if dup_cols:
+                    if st.session_state.get("debug_mode", False):
+                        st.caption(f"⚠️ 데이터 경고: 중복 컬럼 감지 {dup_cols} → 첫 컬럼 기준으로 정리했습니다.")
+                    # ✅ 이 줄은 debug_mode와 무관하게 항상 실행되어야 함
                     working_pool = working_pool.loc[:, ~working_pool.columns.duplicated()].copy()
 
                 # 1) 영상 필터: video_id가 있으면 video_id로, 없으면 링크로
@@ -1753,14 +1772,25 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     id_obj = pd.Series(id_obj, index=working_pool.index)
                 id_series = id_obj.fillna("").astype(str)
 
-                # ✅ 유사 댓글 테이블 생성 (여기서 ValueError:2 방지)
-                similar_comments = pd.DataFrame({
-                    "comment_id": id_series,
-                    "원문": working_pool.apply(_get_text, axis=1),
-                    "좋아요 수": working_pool.apply(_get_likes, axis=1),
-                    "PII": working_pool.apply(_get_pii, axis=1),
-                    "작성일시": working_pool.apply(_get_written_at, axis=1),
-                })
+                # ✅ 유사 댓글 테이블 생성 (dict -> concat, 모든 컬럼 1D 강제)
+                text_series = _as_1d_series(working_pool.apply(_get_text, axis=1), working_pool.index).fillna("").astype(str)
+                likes_series = _as_1d_series(working_pool.apply(_get_likes, axis=1), working_pool.index)
+                pii_series = _as_1d_series(working_pool.apply(_get_pii, axis=1), working_pool.index).fillna("").astype(str)
+                written_series = _as_1d_series(working_pool.apply(_get_written_at, axis=1), working_pool.index).fillna("").astype(str)
+
+                id_series = _as_1d_series(id_series, working_pool.index).fillna("").astype(str)  # ✅ 혹시라도 방어
+
+                similar_comments = pd.concat(
+                    [
+                        id_series.rename("comment_id"),
+                        text_series.rename("원문"),
+                        likes_series.rename("좋아요 수"),
+                        pii_series.rename("PII"),
+                        written_series.rename("작성일시"),
+                    ],
+                    axis=1,
+                )
+
 
                 similar_comments = (
                     similar_comments[similar_comments["원문"].str.strip().ne("")]
