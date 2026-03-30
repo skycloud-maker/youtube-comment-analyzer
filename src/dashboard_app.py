@@ -1915,10 +1915,22 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         render_card("분석 영상 수", f"{len(summary):,}")
     with k2:
         # 전체 댓글 기준 합계
-        total_all = int(pd.to_numeric(summary.get("분석_전체_댓글_수", 0), errors="coerce").fillna(0).sum())
+        if summary.empty or "분석_전체_댓글_수" not in summary.columns:
+            total_all = 0
+        else:
+            total_all = int(
+                pd.to_numeric(summary["분석_전체_댓글_수"], errors="coerce")
+                .fillna(0)
+                .sum()
+            )
         render_card("전체 댓글(합)", f"{total_all:,}")
     with k3:
-        top_video = _localized_video_title(_safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-")))
+        if summary.empty:
+            top_video = "-"
+        else:
+            top_video = _localized_video_title(
+                _safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-"))
+            )
         render_card("최상위 이슈 영상", str(top_video)[:28] or "-")
 
     # ✅ 상단 리스트(전체 분포)
