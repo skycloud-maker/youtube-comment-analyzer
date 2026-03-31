@@ -29,3 +29,36 @@ analytics:
 excel:
   datetime_format: yyyy-mm-dd hh:mm:ss
   freeze_panes: A2
+dashboard:
+  supported_regions:
+    - KR
+    - US
+  primary_product_filters:
+    - 냉장고
+    - 세탁기
+    - 건조기
+    - 식기세척기
+    - 청소기
+    - 오븐
+  extra_product_filters:
+    - 정수기
+    - 인덕션
+    - 와인셀러
+    - 컵세척기
+    - 실내식물재배기(틔운)
+  brand_filter_options:
+    - LG
+    - Samsung
+    - GE
+    - Whirlpool
+  build_label: stable
+  cache_schema_version: dashboard-v2
+  lite_comments_limit: 1000
+  weekly_chart_page_min: 4
+  weekly_chart_page_max: 24
+  weekly_chart_page_default: 12
+  weekly_chart_page_step: 2
+  mpl_font_candidates:
+    - fonts/NanumGothic.ttf
+    - C:/Windows/Fonts/malgun.ttf
+    - C:/Windows/Fonts/NanumGothic.ttf

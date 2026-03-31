@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,31 @@ class ExcelSettings(BaseModel):
     freeze_panes: str = "A2"
 
 
+class DashboardSettings(BaseModel):
+    supported_regions: list[str] = Field(default_factory=lambda: ["KR", "US"])
+    primary_product_filters: list[str] = Field(
+        default_factory=lambda: ["냉장고", "세탁기", "건조기", "식기세척기", "청소기", "오븐"]
+    )
+    extra_product_filters: list[str] = Field(
+        default_factory=lambda: ["정수기", "인덕션", "와인셀러", "컵세척기", "실내식물재배기(틔운)"]
+    )
+    brand_filter_options: list[str] = Field(default_factory=lambda: ["LG", "Samsung", "GE", "Whirlpool"])
+    build_label: str = "stable"
+    cache_schema_version: str = "dashboard-v2"
+    lite_comments_limit: int = 1000
+    weekly_chart_page_min: int = 4
+    weekly_chart_page_max: int = 24
+    weekly_chart_page_default: int = 12
+    weekly_chart_page_step: int = 2
+    mpl_font_candidates: list[Path] = Field(
+        default_factory=lambda: [
+            Path("fonts/NanumGothic.ttf"),
+            Path("C:/Windows/Fonts/malgun.ttf"),
+            Path("C:/Windows/Fonts/NanumGothic.ttf"),
+        ]
+    )
+
+
 class YamlSettings(BaseModel):
     project_name: str = "youtube-comment-analysis"
     log_level: str = "INFO"
@@ -48,6 +74,7 @@ class YamlSettings(BaseModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     excel: ExcelSettings = Field(default_factory=ExcelSettings)
+    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
 
 
 class EnvSettings(BaseSettings):
@@ -74,7 +101,6 @@ class AppConfig(BaseModel):
         return self
 
 
-
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Settings file not found: {path}")
@@ -85,6 +111,12 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return payload
 
 
+def load_yaml_settings_optional(path: Path | None = None) -> YamlSettings:
+    settings_path = path or Path(os.getenv("YT_ANALYSIS_SETTINGS_PATH", "config/settings.example.yaml"))
+    if not settings_path.exists():
+        return YamlSettings()
+    return YamlSettings.model_validate(_load_yaml(settings_path))
+
 
 def load_config() -> AppConfig:
     load_dotenv()
@@ -93,5 +125,5 @@ def load_config() -> AppConfig:
     except ValidationError as exc:
         raise RuntimeError("Configuration error: YOUTUBE_API_KEY must be provided via environment variables.") from exc
 
-    yaml_settings = YamlSettings.model_validate(_load_yaml(env.yt_analysis_settings_path))
+    yaml_settings = load_yaml_settings_optional(env.yt_analysis_settings_path)
     return AppConfig(env=env, yaml=yaml_settings)

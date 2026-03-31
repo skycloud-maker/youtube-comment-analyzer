@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,19 @@ from src.analytics.sentiment import score_sentiment
 from src.analytics.topics import infer_topic
 from src.analytics.trends import build_issue_keyword_status, build_weekly_keyword_trend, build_weekly_sentiment_trend
 from src.utils.io import ensure_dir, write_dataframe
+
+
+def _canonical_representative_text(text: str) -> str:
+    normalized = re.sub(r"[^\w\s\uac00-\ud7a3]", " ", str(text or "").lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized[:120]
+
+
+def _looks_like_inquiry(text: str) -> bool:
+    source = str(text or "")
+    lowered = source.lower()
+    return "?" in source or any(token in lowered for token in ["\uC5B4\uB5BB\uAC8C", "\uC5B4\uB514", "\uC65C", "\uAC00\uB2A5\uD55C\uAC00", "\uAC00\uB2A5\uD560\uAE4C\uC694", "how", "where", "why", "can i", "does it"])
+
 
 
 class AnalyticsPipeline:
@@ -231,6 +245,15 @@ class AnalyticsPipeline:
         working = comments_df.copy()
         if "representative_decision" in working.columns:
             working = working[working["representative_decision"].isin(["strong_candidate", "review_needed"])].copy()
+        if "classification_type" in working.columns:
+            working = working[working["classification_type"].fillna("").astype(str).str.lower().ne("informational")].copy()
+        if "product_related" in working.columns:
+            working = working[working["product_related"].fillna(False)].copy()
+        if "text_display" in working.columns:
+            working = working[~working["text_display"].fillna("").map(_looks_like_inquiry)].copy()
+        if working.empty:
+            return pd.DataFrame()
+
         frames = []
         decision_rank = {"strong_candidate": 0, "review_needed": 1, "not_suitable": 2}
         for label in ["positive", "negative", "neutral"]:
@@ -243,8 +266,18 @@ class AnalyticsPipeline:
                 subset["_decision_rank"] = 9
             if "representative_score" not in subset.columns:
                 subset["representative_score"] = 0
-            subset = subset.sort_values(["_decision_rank", "representative_score", "like_count", "sentiment_score"], ascending=[True, False, False, label != "negative"]).head(8)
-            frames.append(subset.drop(columns=["_decision_rank"], errors="ignore"))
+            subset["_dedup_key"] = subset.apply(
+                lambda row: "|".join([
+                    str(row.get("cluster_id", "") or ""),
+                    str(row.get("product", "") or ""),
+                    str(row.get("topic_label", row.get("classification_type", "general")) or "general"),
+                    _canonical_representative_text(row.get("cleaned_text", row.get("text_display", ""))),
+                ]),
+                axis=1,
+            )
+            subset = subset.sort_values(["_decision_rank", "representative_score", "like_count", "sentiment_score"], ascending=[True, False, False, label != "negative"])
+            subset = subset.drop_duplicates(subset=["_dedup_key"], keep="first").head(8)
+            frames.append(subset.drop(columns=["_decision_rank", "_dedup_key"], errors="ignore"))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     @staticmethod

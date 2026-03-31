@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from src.analytics.sentiment import score_sentiment
 
@@ -40,6 +41,14 @@ INFORMATIONAL_MARKERS = [
 EMOTIONAL_ONLY_MARKERS = [
     "nightmares", "scary", "funny", "hilarious", "lol", "lmao", "haha",
     "\ubb34\uc11c\uc6e0", "\uc6c3\uae30\ub124", "\u3154\u3154", "\u314b\u314b", "\ud6c4\ub35c\ub35c",
+]
+CHANNEL_FEEDBACK_MARKERS = [
+    "video", "videos", "channel", "creator", "youtuber", "youtube", "editing", "edit", "thumbnail", "host", "reviewer",
+    "\uC601\uC0C1", "\uCC44\uB110", "\uC720\uD29C\uBE0C", "\uD3B8\uC9D1", "\uC36C\uB124\uC77C", "\uC9C4\uD589", "\uC9C4\uD589\uC790", "\uB9AC\uBDF0\uC5B4", "\uD06C\uB9AC\uC5D0\uC774\uD130", "\uC124\uBA85 \uC798", "\uC601\uC0C1\uBBF8",
+]
+GENERIC_POSITIVE_ONLY_MARKERS = [
+    "good", "great", "nice", "awesome", "amazing", "best", "love it", "thanks", "thank you",
+    "\uC88B\uC544\uC694", "\uC88B\uB124\uC694", "\uC88B\uB124", "\uCD5C\uACE0", "\uAC10\uC0AC", "\uAC10\uC0AC\uD569\uB2C8\uB2E4", "\uAD7F", "\uB300\uBC15",
 ]
 PRODUCT_MARKERS = [
     "washer", "washing machine", "dryer", "refrigerator", "fridge", "dishwasher",
@@ -86,6 +95,22 @@ def _contains_any(text: str, markers: list[str]) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+def _normalize_text(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def _is_channel_feedback(text: str) -> bool:
+    lowered = _normalize_text(text)
+    return _contains_any(lowered, CHANNEL_FEEDBACK_MARKERS)
+
+
+def _is_generic_positive_only(text: str) -> bool:
+    lowered = _normalize_text(text)
+    compact = re.sub(r"[^\w\s\uac00-\ud7a3]", " ", lowered)
+    compact = " ".join(compact.split())
+    return compact in GENERIC_POSITIVE_ONLY_MARKERS
+
+
 def _detect_target(text: str, parent_comment: str, context_comments: list[str] | None) -> str | None:
     blob = " ".join([text or "", parent_comment or "", " ".join(context_comments or [])]).lower()
     for label, markers in TARGET_PATTERNS.items():
@@ -101,14 +126,17 @@ def _is_product_related(text: str, parent_comment: str, context_comments: list[s
     own_related = _contains_any(source, PRODUCT_MARKERS)
     parent_related = _contains_any(parent, PRODUCT_MARKERS)
     context_related = _contains_any(context_blob, PRODUCT_MARKERS)
+
     if own_related:
         return True, False
-    if context_related and (_is_strong_negative(source) or _is_strong_positive(source) or _is_comparison(source, parent) or _is_preference(source)):
-        return True, True
+    if _is_channel_feedback(source) or _contains_any(source, EMOTIONAL_ONLY_MARKERS):
+        return False, False
+    if _is_generic_positive_only(source):
+        return False, False
     if is_agreement and (parent_related or context_related):
         return True, True
-    if _contains_any(source, EMOTIONAL_ONLY_MARKERS) and not own_related:
-        return False, False
+    if parent_related and (_is_comparison(source, parent) or _is_preference(source)):
+        return True, True
     return False, False
 
 

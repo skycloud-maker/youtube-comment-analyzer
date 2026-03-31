@@ -247,6 +247,26 @@ def _richness_score(text: str) -> float:
     return max(0.0, min(score, 10.0))
 
 
+def _normalized_bundle_text(text: str) -> str:
+    lowered = _safe_text(text).lower()
+    lowered = re.sub(r"[^\w\s\uac00-\ud7a3]", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered[:120]
+
+
+def _is_bundle_candidate(row: pd.Series) -> bool:
+    sentiment = _safe_text(row.get("sentiment_code", "neutral")).lower()
+    if sentiment not in {"positive", "negative"}:
+        return False
+    if bool(row.get("duplicate_opinion_flag", False)):
+        return False
+    if bool(row.get("inquiry_flag", False)) and _safe_text(row.get("classification_type", "")).lower() == "informational":
+        return False
+    if not bool(row.get("product_related", False)):
+        return False
+    return True
+
+
 def _likes_score(likes_count: Any) -> float:
     try:
         likes = float(likes_count)
@@ -401,9 +421,15 @@ def _bundle_selection_reason(top_row: pd.Series, cluster_size: int) -> str:
 def build_representative_bundles(opinion_units_df: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     if opinion_units_df.empty:
         return pd.DataFrame()
-    working = opinion_units_df[opinion_units_df["sentiment_code"].isin(["positive", "negative"])].copy()
+    working = opinion_units_df[opinion_units_df.apply(_is_bundle_candidate, axis=1)].copy()
     if working.empty:
         return pd.DataFrame()
+    working["_dedup_text_key"] = working["opinion_text"].map(_normalized_bundle_text)
+    working = working.sort_values(["opinion_score", "likes_count"], ascending=[False, False], na_position="last")
+    working = working.drop_duplicates(
+        subset=["sentiment_code", "product_category", "brand_mentioned", "cej_scene_code", "aspect_key", "_dedup_text_key"],
+        keep="first",
+    )
     rows: list[dict[str, Any]] = []
     group_cols = ["sentiment_code", "product_category", "product_subtype", "brand_mentioned", "cej_scene_code", "aspect_key"]
     for _, group in working.groupby(group_cols, dropna=False):
@@ -463,12 +489,14 @@ def build_representative_bundles(opinion_units_df: pd.DataFrame, top_n: int = 5)
     if bundle_df.empty:
         return bundle_df
     ranked_frames = []
+    bundle_df["_top_text_key"] = bundle_df["top_display_text"].map(_normalized_bundle_text)
     for sentiment_code in ["negative", "positive"]:
-        subset = bundle_df[bundle_df["sentiment_code"] == sentiment_code].sort_values(["bundle_score", "cluster_size"], ascending=[False, False]).head(top_n).copy()
+        subset = bundle_df[bundle_df["sentiment_code"] == sentiment_code].sort_values(["bundle_score", "cluster_size"], ascending=[False, False])
+        subset = subset.drop_duplicates(subset=["product_category", "brand_mentioned", "aspect_key", "_top_text_key"], keep="first").head(top_n).copy()
         if subset.empty:
             continue
         subset["rank"] = range(1, len(subset) + 1)
-        ranked_frames.append(subset)
+        ranked_frames.append(subset.drop(columns=["_top_text_key"], errors="ignore"))
     return pd.concat(ranked_frames, ignore_index=True) if ranked_frames else pd.DataFrame(columns=bundle_df.columns.tolist() + ["rank"])
 
 
