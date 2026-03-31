@@ -343,17 +343,16 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     if needs_context_translation.any():
         working.loc[needs_context_translation, COL_CONTEXT_TRANSLATION] = working.loc[needs_context_translation, COL_CONTEXT].map(translate_to_korean)
 
-    @st.cache_data(show_spinner=False)
-    def _reanalyze_cached(row_dict: dict) -> dict:
+    def _reanalyze(row: pd.Series) -> pd.Series:
         result = analyze_comment_with_context(
-            row_dict.get(COL_ORIGINAL, ""),
-            validity=row_dict.get("comment_validity", "valid"),
-            exclusion_reason=row_dict.get("exclusion_reason"),
-            parent_comment=row_dict.get(COL_CONTEXT),
-            context_comments=[row_dict.get(COL_CONTEXT)] if row_dict.get(COL_CONTEXT) else None,
-            is_reply=bool(row_dict.get("parent_comment_id")),
+            _safe_text(row.get(COL_ORIGINAL, "")),
+            validity=_safe_text(row.get("comment_validity", "valid")) or "valid",
+            exclusion_reason=_safe_text(row.get("exclusion_reason", "")) or None,
+            parent_comment=_safe_text(row.get(COL_CONTEXT, "")) or None,
+            context_comments=[_safe_text(row.get(COL_CONTEXT, ""))] if _safe_text(row.get(COL_CONTEXT, "")) else None,
+            is_reply=bool(_safe_text(row.get("parent_comment_id", ""))),
         )
-        return {
+        return pd.Series({
             "display_sentiment": result.sentiment_label or "neutral",
             "display_signal_strength": result.signal_strength,
             "display_classification_type": result.classification_type,
@@ -363,12 +362,9 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
             "display_product_target": result.product_target or "",
             "display_reason": result.reason,
             "display_needs_review": result.needs_review,
-        }
+        })
 
-    analysis_df = working.apply(
-        lambda r: pd.Series(_reanalyze_cached(r.to_dict())),
-        axis=1
-    )
+    analysis_df = working.apply(_reanalyze, axis=1)
     working = pd.concat([working.reset_index(drop=True), analysis_df.reset_index(drop=True)], axis=1)
 
     if sentiment:
