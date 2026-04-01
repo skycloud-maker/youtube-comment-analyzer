@@ -1,0 +1,52 @@
+# =========================================================
+# Dashboard UI Rules (Harness Standard Spec)
+# Version: 1.0
+# Contract: This file MUST NOT crash the app if missing keys.
+# =========================================================
+
+meta:
+  version: 1.0
+  description: >
+    UI labels and display rules for YouTube Appliance VoC Dashboard.
+    Missing keys must fall back to safe defaults.
+  owner: HS CX / VoC Dashboard
+  last_updated: 2026-04-01
+
+# ---------------------------------------------------------
+# UI LABELS
+# ---------------------------------------------------------
+ui:
+
+  # =========================
+  # Section Titles & Captions
+  # =========================
+  representative_section_title: "핵심 대표 코멘트"
+  representative_section_caption_ko: >
+    현재 필터 범위에서 반복적으로 나타나는 제품 의견을
+    대표 코멘트 중심으로 정리합니다.
+
+  # =========================
+  # Representative Labels
+  # =========================
+  representative_negative_label: "부정 대표 코멘트"
+  representative_positive_label: "긍정 대표 코멘트"
+
+  # =========================
+  # Representative Fields
+  # =========================
+  representative_related_video: "영상제목"
+  representative_summary: "요약(1~2문장)"
+  representative_evidence: "근거 발췌(1~2개)"
+
+  # =========================
+  # Empty / Fallback Messages
+  # =========================
+  representative_empty_info: "현재 조건에서 보여줄 대표 코멘트가 없습니다."
+  keyword_empty_info: "표시할 키워드가 없습니다."
+  inquiry_empty_info: "현재 조건에서 반복 문의로 분류된 코멘트가 없습니다."
+
+  # =========================
+  # Safety / Error Display
+  # =========================
+  fallback_text: "-"
+  garbled_text_replacement: "N/A"
