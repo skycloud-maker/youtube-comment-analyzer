@@ -22,7 +22,10 @@ _GENERIC_KO = {
 }
 _AD_MARKERS = {
     "promo code", "discount link", "dm me", "telegram", "whatsapp", "http://", "https://", "www.",
+    "\ub9c1\ud06c", "\ucfe0\ud321", "\ud30c\ud2b8\ub108\uc2a4", "\ub124\uc774\ubc84\uc1fc\ud551", "\uc1fc\ud551\ucee4\ub125\ud2b8",
+    "\uc81c\ud734", "\uad11\uace0", "\uc218\uc218\ub8cc", "\uace0\uc815\ub313\uae00", "\ub9c1\ud06c\ub85c \uad6c\uc785",
 }
+
 _MEANINGLESS_MARKERS = {"lol", "\u314b\u314b", "\u314e\u314e", "wow", "omg"}
 
 

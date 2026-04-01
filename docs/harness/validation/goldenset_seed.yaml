@@ -1,28 +1,13 @@
-# Golden Set Seed — YouTube Appliance VoC Dashboard Harness (v0.1)
-#
-# 사용법:
-#   1. TBD_* 값을 실제 video_id / comment_id 로 교체하세요.
-#      - data/processed/{run_id}/comments.parquet 에서 comment_id 확인
-#      - data/processed/{run_id}/videos.parquet 에서 video_id 확인
-#   2. input_snippet을 실제 댓글 부분 발췌로 교체 (PII 마스킹, 최대 300 chars)
-#   3. pytest -q tests/golden 으로 통과 확인
-#
-# 라벨 값은 코드 내 실제 값(소문자)을 사용합니다:
-#   "positive" / "negative" / "neutral" / "excluded"
-#
-# 스키마/운영 가이드: goldenset.md 참조
-# reason_code 전체 목록: audit-log-spec.md 참조
-
 - golden_id: GS-0001
   video_id: TBD_VIDEO_DRYER_COMPARE_202601
   comment_id: TBD_COMMENT_PINNED_AFFILIATE
   language: ko
   case_tags:
-    - PROMO
-    - PINNED_COMMERCIAL
-  input_snippet: "※고정댓글 링크로 구입 시 ... 쿠팡파트너스 ... 네이버쇼핑커넥트 ... 수수료 ..."
+  - PROMO
+  - PINNED_COMMERCIAL
+  input_snippet: ※고정댓글 링크로 구입 시 쿠팡파트너스 네이버쇼핑커넥트 수수료 안내
   expected:
-    sentiment_label: excluded        # 코드 내 실제 값: "excluded"
+    sentiment_label: excluded
     promo_flag: true
     eligible_for_representative: false
     eligible_for_keywords: false
@@ -35,30 +20,29 @@
       snippet_only_ok: true
       similar_list_ok: true
     keyword_checks:
-      noise_topk_ok: true            # 이 댓글의 토큰이 top-K에 기여하면 안 됨
+      noise_topk_ok: true
       label_purity_ok: true
     similarity_checks:
-      should_return_empty: true      # excluded 댓글은 유사도 계산 대상 제외
+      should_return_empty: true
       min_topic_overlap_ok: true
     reason_code: PROMO_DETECTED
-  notes: >
-    광고/제휴/링크유도 고정댓글이 "positive"로 유입되거나 대표로 선정되면 즉시 실패.
-    INV-02, AC-01 검증. NOISE_TERMS 중 "쿠팡", "파트너스", "링크", "고정댓글" 포함 케이스.
+  notes: '광고/제휴/링크유도 고정댓글이 "positive"로 유입되거나 대표로 선정되면 즉시 실패. INV-02, AC-01 검증. NOISE_TERMS 중 "쿠팡", "파트너스", "링크", "고정댓글" 포함 케이스.
 
+    '
 - golden_id: GS-0002
   video_id: TBD_VIDEO_WITH_POSITIVE_ZERO
   comment_id: TBD_SCENARIO_ANCHOR_POS_ZERO
   language: ko
   case_tags:
-    - COUNT_REP_MISMATCH
-  input_snippet: "시나리오 앵커 — 이 영상의 positive count=0 조건에서 positive 대표가 표시되면 실패"
+  - COUNT_REP_MISMATCH
+  input_snippet: 시나리오 앵커 — 이 영상의 positive count=0 조건에서 positive 대표가 표시되면 실패
   expected:
     sentiment_label: neutral
     promo_flag: false
     eligible_for_representative: true
     eligible_for_keywords: true
     eligible_for_similarity: true
-    representative_slot: null        # positive count=0이므로 positive 슬롯은 null
+    representative_slot: null
     representative_template_checks:
       header_ok: true
       video_title_label_ok: true
@@ -72,17 +56,16 @@
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: COUNT_ZERO
-  notes: >
-    positive count=0인데 positive 대표가 뜨면 즉시 실패 (INV-03, AC-03).
-    실제 video_id/comment_id 매핑 필요. 해당 영상에서 positive 댓글이 0건인 케이스를 찾아 교체.
+  notes: 'positive count=0인데 positive 대표가 뜨면 즉시 실패 (INV-03, AC-03). 실제 video_id/comment_id 매핑 필요. 해당 영상에서 positive 댓글이 0건인 케이스를 찾아 교체.
 
+    '
 - golden_id: GS-0003
-  video_id: TBD_VIDEO_SUMMARY_TABLE
-  comment_id: TBD_COMMENT_GARBLED_CHARS
+  video_id: T28X0JpDziM
+  comment_id: Ugz5zwLDjdcR93Uo5yZ4AaABAg
   language: ko
   case_tags:
-    - GARBLED_TEXT
-  input_snippet: "주요 부정 포인트 컬럼에 '???' 또는 깨진 문자가 출력된 사례 (원문 일부 발췌)"
+  - GARBLED_TEXT
+  input_snippet: '"아직도 이종호를 만난적이 없습니다." ???ㅋㅋㅋㅋㅋ "미래에도 없을 것 입니다."'
   expected:
     sentiment_label: neutral
     promo_flag: false
@@ -93,7 +76,7 @@
     representative_template_checks:
       header_ok: true
       video_title_label_ok: true
-      no_garbled_ok: true            # 깨진 문자열은 UI에 직접 출력 금지
+      no_garbled_ok: true
       snippet_only_ok: true
       similar_list_ok: true
     keyword_checks:
@@ -103,17 +86,14 @@
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: GARBLED_TEXT_DETECTED
-  notes: >
-    깨진 문자열은 UI에 직접 노출 금지. "N/A" 치환 + reason_code 필수.
-    INV-04, AC-06, AC-07 검증. 실제 케이스: 영상 분석 요약 테이블 "주요 부정 포인트" 컬럼.
-
+  notes: ?? ????? ??? ??? ??? ??? ?? ??. ??? ? ?? ???? ??.
 - golden_id: GS-0004
   video_id: TBD_VIDEO_KEYWORDS_NOISE
   comment_id: TBD_COMMENT_WITH_NOISE_TERMS
   language: ko
   case_tags:
-    - KEYWORD_NOISE
-  input_snippet: "워드클라우드/도넛 상위 키워드에 '클릭/제품보기/가격/쿠팡/링크' 등 노이즈가 포함된 사례"
+  - KEYWORD_NOISE
+  input_snippet: 클릭 제품보기 가격 쿠팡 링크 파트너스 배송 고정댓글
   expected:
     sentiment_label: negative
     promo_flag: false
@@ -128,24 +108,22 @@
       snippet_only_ok: true
       similar_list_ok: true
     keyword_checks:
-      noise_topk_ok: true            # NOISE_TERMS 단어가 top-K에 없어야 true
+      noise_topk_ok: true
       label_purity_ok: true
     similarity_checks:
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: KEYWORD_CONTAINS_NOISE
-  notes: >
-    negative/positive 키워드가 감성과 무관한 노이즈 중심이면 실패.
-    INV-05, AC-09 검증. NOISE_TERMS 목록은 goldenset.md 섹션 4 참조.
-    filter_business_keywords() 함수 동작 검증 케이스.
+  notes: 'negative/positive 키워드가 감성과 무관한 노이즈 중심이면 실패. INV-05, AC-09 검증. NOISE_TERMS 목록은 goldenset.md 섹션 4 참조. filter_business_keywords() 함수 동작 검증 케이스.
 
+    '
 - golden_id: GS-0005
-  video_id: TBD_VIDEO_FRIDGE_BESPOKE
-  comment_id: TBD_COMMENT_NEGATIVE_AI_MAINBOARD
+  video_id: T28X0JpDziM
+  comment_id: UgwpacANPoRQJX__2qt4AaABAg
   language: ko
   case_tags:
-    - TEMPLATE_NON_COMPLIANCE
-  input_snippet: "AI 붙은 가전 고장나면 메인보드 통째로... 고비용 유지비... (부분 발췌, 최대 300 chars)"
+  - TEMPLATE_NON_COMPLIANCE
+  input_snippet: 이 영상에서 하는 말 다 틀린듯... 드럼의 최대 단점은 헹굼이 챝챝하다... 거름망이 없어 옷에 먼지가 많이 붙는다...
   expected:
     sentiment_label: negative
     promo_flag: false
@@ -154,11 +132,11 @@
     eligible_for_similarity: true
     representative_slot: negative
     representative_template_checks:
-      header_ok: true              # "Top1 인지 단계 negative 코멘트" 형태 필수
-      video_title_label_ok: true   # "영상제목: ..." 필수
-      no_garbled_ok: true          # ??? 출력 금지
-      snippet_only_ok: true        # 원문 전체 아닌 근거 발췌만 표시
-      similar_list_ok: true        # n>0이면 유사 의견 목록 제공
+      header_ok: true
+      video_title_label_ok: true
+      no_garbled_ok: true
+      snippet_only_ok: true
+      similar_list_ok: true
     keyword_checks:
       noise_topk_ok: true
       label_purity_ok: true
@@ -166,17 +144,14 @@
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: TEMPLATE_FIELD_MISSING
-  notes: >
-    대표 코멘트는 장문 boilerplate 금지, 요약(1~2문장)+근거발췌(1~2개) 중심.
-    AC-08 검증. 실제 ID 교체 후 템플릿 출력 형식 회귀 테스트로 사용.
-
+  notes: ?? ??? ??? ??? ???? ??. ?? ??? ?? ??? ?? ???? ??.
 - golden_id: GS-0006
   video_id: TBD_VIDEO_LABEL_REP_MISMATCH
   comment_id: TBD_COMMENT_LABEL_MISMATCH
   language: ko
   case_tags:
-    - LABEL_REP_MISMATCH
-  input_snippet: "라벨은 negative인데 대표로 뽑힌 코멘트가 negative와 무관한 내용 (시나리오 앵커)"
+  - LABEL_REP_MISMATCH
+  input_snippet: 라벨은 negative인데 대표로 뽑힌 코멘트가 negative와 무관한 내용 (시나리오 앵커)
   expected:
     sentiment_label: negative
     promo_flag: false
@@ -197,24 +172,23 @@
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: LABEL_MISMATCH
-  notes: >
-    대표는 동일 라벨 bucket ("negative")에서만 선택해야 한다 (하드 제약).
-    INV-01, AC-02 검증.
+  notes: '대표는 동일 라벨 bucket ("negative")에서만 선택해야 한다 (하드 제약). INV-01, AC-02 검증.
 
+    '
 - golden_id: GS-0007
-  video_id: TBD_VIDEO_SIM_GIBBERISH
-  comment_id: TBD_COMMENT_GIBBERISH_WORDPLAY
+  video_id: T28X0JpDziM
+  comment_id: UgyspMuanvykyKevDJl4AaABAg
   language: en
   case_tags:
-    - SIMILARITY_IRRELEVANT
-    - GIBBERISH_INPUT
-  input_snippet: "Taffy Duck Alfredo Einstein ... (무의미 나열형 텍스트, 일부 발췌, 최대 300 chars)"
+  - SIMILARITY_IRRELEVANT
+  - GIBBERISH_INPUT
+  input_snippet: https://youtu.be/j2OZC0nM1f4?si=vHjhklV6AsU6dgY4
   expected:
-    sentiment_label: excluded        # 무의미 텍스트 → excluded 처리
+    sentiment_label: excluded
     promo_flag: false
     eligible_for_representative: false
     eligible_for_keywords: false
-    eligible_for_similarity: false   # 무의미 텍스트는 유사도 계산 대상 제외
+    eligible_for_similarity: false
     representative_slot: null
     representative_template_checks:
       header_ok: true
@@ -226,20 +200,17 @@
       noise_topk_ok: true
       label_purity_ok: true
     similarity_checks:
-      should_return_empty: true      # 무의미 텍스트 → 유사댓글 empty 필수
+      should_return_empty: true
       min_topic_overlap_ok: true
     reason_code: GIBBERISH_INPUT
-  notes: >
-    무의미/나열형 텍스트는 유사댓글 강제 매칭 금지. empty + reason_code=GIBBERISH_INPUT 반환 필수.
-    INV-06, AC-11, AC-12 검증. 영어 케이스 — 다국어 처리 파이프라인도 함께 검증.
-
+  notes: ?? ???? ??? URL-only ??. similarity / representative / keyword ???? ????? ??.
 - golden_id: GS-0008
   video_id: TBD_VIDEO_HOT_MISSING
   comment_id: TBD_SCENARIO_COVERAGE
   language: ko
   case_tags:
-    - COVERAGE_MISSING_HOT_VIDEO
-  input_snippet: "핫한 리뷰 영상인데 대시보드에서 누락된 사례 (시나리오 앵커 — 실제 영상 ID로 교체 필요)"
+  - COVERAGE_MISSING_HOT_VIDEO
+  input_snippet: 핫한 리뷰 영상인데 대시보드에서 누락된 사례 (시나리오 앵커 — 실제 영상 ID로 교체 필요)
   expected:
     sentiment_label: neutral
     promo_flag: false
@@ -260,7 +231,6 @@
       should_return_empty: false
       min_topic_overlap_ok: true
     reason_code: COVERAGE_MISSING_HOT_VIDEO
-  notes: >
-    누락 자체보다 "왜 누락됐는지(reason_code=COVERAGE_MISSING_HOT_VIDEO)"를
-    반드시 기록/표시할 수 있어야 한다. AC-13 검증.
-    실제 케이스: 조회수/댓글수 상위인데 수집 범위에서 빠진 영상.
+  notes: '누락 자체보다 "왜 누락됐는지(reason_code=COVERAGE_MISSING_HOT_VIDEO)"를 반드시 기록/표시할 수 있어야 한다. AC-13 검증. 실제 케이스: 조회수/댓글수 상위인데 수집 범위에서 빠진 영상.
+
+    '

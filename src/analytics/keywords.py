@@ -8,6 +8,8 @@ from typing import Iterable
 
 import pandas as pd
 
+URL_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+
 KOREAN_STOPWORDS = {
     "그리고", "그러나", "근데", "그런데", "하지만", "또한", "또", "그래서", "그래도", "왜", "정말", "진짜", "너무",
     "약간", "조금", "그냥", "영상", "댓글", "제품", "경우", "부분", "정도", "관련", "사용", "이거", "저거", "그거",
@@ -31,9 +33,14 @@ ENGLISH_STOPWORDS = {
     "youre", "theyre", "thats", "theres", "whats", "ill", "id", "weve", "isnt", "arent", "wont", "hadnt",
 }
 
-GENERIC_EXCLUDE = {"문제", "이슈", "상태", "부분", "경험", "느낌", "후기"}
+GENERIC_EXCLUDE = {"\ubb38\uc81c", "\uc774\uc288", "\uc0c1\ud0dc", "\ubd80\ubd84", "\uacbd\ud5d8", "\ub290\ub08c", "\ud6c4\uae30"}
+DOMAIN_NOISE_TERMS = {
+    "\ud074\ub9ad", "\ub9c1\ud06c", "\uc81c\ud488\ubcf4\uae30", "\uad6c\uc785", "\uad6c\ub9e4", "\ucfe0\ud321", "\ud30c\ud2b8\ub108\uc2a4", "\ub124\uc774\ubc84", "\uc1fc\ud551", "\ucee4\ub125\ud2b8",
+    "\uc218\uc218\ub8cc", "\uace0\uc815\ub313\uae00", "\ud560\uc778", "\uccb4\uac10\uac00", "\uac00\uaca9", "\ud488\uc808", "\ubc30\uc1a1", "\uc8fc\ubb38\ucde8\uc18c", "\ucd94\ucc9c\uc81c\ud488",
+    "\uc694\uc57d", "\uc601\uc0c1", "\uad6c\ub3c5", "\uc88b\uc544\uc694", "\ub313\uae00", "\ucc44\ub110", "\ubb38\uc758",
+}
 
-STOPWORDS = KOREAN_STOPWORDS | ENGLISH_STOPWORDS | GENERIC_EXCLUDE
+STOPWORDS = KOREAN_STOPWORDS | ENGLISH_STOPWORDS | GENERIC_EXCLUDE | DOMAIN_NOISE_TERMS
 
 KEYWORD_TRANSLATIONS = {
     "noise": "소음",
@@ -121,7 +128,8 @@ def normalize_keyword(token: str) -> str:
 
 def tokenize_text(text: str) -> list[str]:
     tokens: list[str] = []
-    for raw_token in _TOKEN_RE.findall(str(text or "")):
+    normalized_text = URL_PATTERN.sub(" ", str(text or ""))
+    for raw_token in _TOKEN_RE.findall(normalized_text):
         token = normalize_keyword(raw_token)
         if token:
             tokens.append(token)

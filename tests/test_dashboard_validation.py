@@ -1,4 +1,4 @@
-from io import BytesIO
+﻿from io import BytesIO
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -20,7 +20,7 @@ EXPECTED_SHEETS = {
     "주간감성",
     "CEJ부정률",
     "브랜드언급",
-    "영상당부정밀도",
+    "영상밀도분석",
 }
 
 
@@ -40,7 +40,7 @@ def test_compute_filtered_bundle_supports_inquiry_scope_and_empty_videos():
                 "product": "dryer",
                 "region": "KR",
                 COL_COUNTRY: localize_region("KR"),
-                COL_BRAND: "미언급",
+                COL_BRAND: "LG",
                 COL_CEJ: "기타",
                 COL_SENTIMENT: "중립",
                 "text_display": "설치 어떻게 하나요",
@@ -52,11 +52,11 @@ def test_compute_filtered_bundle_supports_inquiry_scope_and_empty_videos():
                 "product": "dryer",
                 "region": "KR",
                 COL_COUNTRY: localize_region("KR"),
-                COL_BRAND: "미언급",
+                COL_BRAND: "LG",
                 COL_CEJ: "기타",
                 COL_SENTIMENT: "부정",
-                "text_display": "소음이 심해요",
-                "cleaned_text": "소음이 심해요",
+                "text_display": "소음이 너무 심해요",
+                "cleaned_text": "소음이 너무 심해요",
                 "comment_validity": "valid",
             },
         ]
