@@ -17,6 +17,39 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 RAW_DIR = BASE_DIR / "data" / "raw"
 
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+import yaml
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+RULES_PATH = BASE_DIR / "config" / "dashboard_rules.yaml"
+
+
+@lru_cache(maxsize=1)
+def load_dashboard_rules() -> dict[str, Any]:
+    # ✅ 절대 앱을 죽이지 않는다
+    if not RULES_PATH.exists():
+        return {"ui": {}}
+
+    try:
+        with RULES_PATH.open("r", encoding="utf-8") as f:
+            payload = yaml.safe_load(f) or {}
+        if not isinstance(payload, dict):
+            return {"ui": {}}
+        return payload
+    except Exception:
+        return {"ui": {}}
+
+
+@lru_cache(maxsize=1)
+def ui_labels() -> dict[str, str]:
+    rules = load_dashboard_rules()
+    ui = rules.get("ui", {})
+    return dict(ui) if isinstance(ui, dict) else {}
+
+
 COL_COUNTRY = "국가"
 COL_SENTIMENT = "감성"
 COL_CEJ = "고객여정단계"
