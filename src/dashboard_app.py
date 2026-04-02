@@ -33,57 +33,92 @@ APP_SETTINGS = load_yaml_settings_optional()
 DASHBOARD_SETTINGS = APP_SETTINGS.dashboard
 
 
-
-from functools import lru_cache
-from pathlib import Path
-from typing import Any
-import yaml
-
-BASE_DIR = Path(__file__).resolve().parents[1]
-RULES_PATH = BASE_DIR / "config" / "dashboard_rules.yaml"
+def _resolve_repo_path(path: Path) -> Path:
+    return path if path.is_absolute() else (BASE_DIR / path).resolve()
 
 
-@lru_cache(maxsize=1)
-def load_dashboard_rules() -> dict[str, Any]:
-    # ✅ 절대 앱을 죽이지 않는다
-    if not RULES_PATH.exists():
-        return {"ui": {}}
-
-    try:
-        with RULES_PATH.open("r", encoding="utf-8") as f:
-            payload = yaml.safe_load(f) or {}
-        if not isinstance(payload, dict):
-            return {"ui": {}}
-        return payload
-    except Exception:
-        return {"ui": {}}
+def _get_font_file() -> Path | None:
+    return next((path for path in FONT_CANDIDATES if path.exists()), None)
 
 
-@lru_cache(maxsize=1)
-def ui_labels() -> dict[str, str]:
-    rules = load_dashboard_rules()
-    ui = rules.get("ui", {})
-    return dict(ui) if isinstance(ui, dict) else {}
+def _get_font_prop() -> fm.FontProperties | None:
+    font_file = _get_font_file()
+    return fm.FontProperties(fname=str(font_file)) if font_file else None
 
 
-COL_COUNTRY = "국가"
-COL_SENTIMENT = "감성"
-COL_CEJ = "고객여정단계"
-COL_BRAND = "브랜드"
-COL_WRITTEN_AT = "작성일시"
-COL_WEEK_START = "주차시작"
-COL_WEEK_LABEL = "주차표기"
-COL_ORIGINAL = "원문"
-COL_TRANSLATION = "번역(참고)"
-COL_VIDEO_TITLE = "영상제목"
-COL_VIDEO_LINK = "영상 링크"
-COL_LIKES = "좋아요 수"
-COL_LANGUAGE = "언어"
-COL_RAW = "원본 댓글"
-COL_REMOVED = "제거 사유"
-COL_CONTEXT = "연관 맥락"
-COL_CONTEXT_TRANSLATION = "연관 맥락 번역"
+PROCESSED_DIR = _resolve_repo_path(APP_SETTINGS.storage.processed_dir)
+CACHE_DIR = BASE_DIR / "data" / "dashboard_cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_FILE = CACHE_DIR / "dashboard_bundle.pkl"
+CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
+CLOUD_CACHE_FILE = CACHE_DIR / "dashboard_bundle_cloud.pkl"
+CLOUD_CACHE_META = CACHE_DIR / "dashboard_bundle_cloud_meta.json"
+CACHE_SCHEMA_VERSION = DASHBOARD_SETTINGS.cache_schema_version
+DASHBOARD_BUILD_LABEL = DASHBOARD_SETTINGS.build_label
+REGION_LABELS = {"KR": "\uD55C\uAD6D", "US": "\uBBF8\uAD6D"}
+SENTIMENT_LABELS = {
+    "positive": "\uAE0D\uC815",
+    "negative": "\uBD80\uC815",
+    "neutral": "\uC911\uB9BD",
+    "excluded": "\uC81C\uC678",
+}
+CEJ_ORDER = [
+    "\uC778\uC9C0",
+    "\uD0D0\uC0C9",
+    "\uACB0\uC815",
+    "\uAD6C\uB9E4",
+    "\uBC30\uC1A1",
+    "\uC0AC\uC6A9\uC900\uBE44",
+    "\uC0AC\uC6A9",
+    "\uAD00\uB9AC",
+    "\uAD50\uCCB4",
+    "\uAE30\uD0C0",
+]
+PRIMARY_PRODUCT_FILTERS = list(DASHBOARD_SETTINGS.primary_product_filters)
+EXTRA_PRODUCT_FILTERS = list(DASHBOARD_SETTINGS.extra_product_filters)
+PRODUCT_ORDER = PRIMARY_PRODUCT_FILTERS + EXTRA_PRODUCT_FILTERS
+BRAND_FILTER_OPTIONS = list(DASHBOARD_SETTINGS.brand_filter_options)
+REGION_CODES = list(DASHBOARD_SETTINGS.supported_regions)
+FONT_CANDIDATES = tuple(_resolve_repo_path(path) for path in DASHBOARD_SETTINGS.mpl_font_candidates)
+LITE_COMMENTS_LIMIT = DASHBOARD_SETTINGS.lite_comments_limit
+WEEKLY_CHART_MIN = DASHBOARD_SETTINGS.weekly_chart_page_min
+WEEKLY_CHART_MAX = DASHBOARD_SETTINGS.weekly_chart_page_max
+WEEKLY_CHART_DEFAULT = DASHBOARD_SETTINGS.weekly_chart_page_default
+WEEKLY_CHART_STEP = DASHBOARD_SETTINGS.weekly_chart_page_step
+DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
+    ("comments", "comments.parquet"),
+    ("videos", "videos.parquet"),
+    ("brand_ratio", "brand_ratio.parquet"),
+    ("cej_negative_rate", "cej_negative_rate.parquet"),
+    ("negative_density", "negative_density.parquet"),
+    ("new_issue_keywords", "new_issue_keywords.parquet"),
+    ("persistent_issue_keywords", "persistent_issue_keywords.parquet"),
+    ("quality_summary", "quality_summary.parquet"),
+    ("representative_comments", "representative_comments.parquet"),
+    ("representative_bundles", "representative_bundles.parquet"),
+    ("opinion_units", "opinion_units.parquet"),
+    ("analysis_comments", "analysis_comments.parquet"),
+    ("monitoring_summary", "monitoring_summary.parquet"),
+    ("reporting_summary", "reporting_summary.parquet"),
+)
 
+COL_COUNTRY = "\uAD6D\uAC00"
+COL_SENTIMENT = "\uAC10\uC131"
+COL_CEJ = "\uACE0\uAC1D\uC5EC\uC815\uB2E8\uACC4"
+COL_BRAND = "\uBE0C\uB79C\uB4DC"
+COL_WRITTEN_AT = "\uC791\uC131\uC77C\uC2DC"
+COL_WEEK_START = "\uC8FC\uCC28\uC2DC\uC791"
+COL_WEEK_LABEL = "\uC8FC\uCC28\uD45C\uAE30"
+COL_ORIGINAL = "\uC6D0\uBB38 \uB313\uAE00"
+COL_TRANSLATION = "\uD55C\uAD6D\uC5B4 \uBC88\uC5ED"
+COL_VIDEO_TITLE = "\uC601\uC0C1 \uC81C\uBAA9"
+COL_VIDEO_LINK = "\uC601\uC0C1 \uB9C1\uD06C"
+COL_LIKES = "\uC88B\uC544\uC694 \uC218"
+COL_LANGUAGE = "\uC5B8\uC5B4"
+COL_RAW = "\uC6D0\uBCF8 \uB313\uAE00"
+COL_REMOVED = "\uC81C\uAC70 \uC0AC\uC720"
+COL_CONTEXT = "\uC5F0\uAD00 \uB9E5\uB77D"
+COL_CONTEXT_TRANSLATION = "\uC5F0\uAD00 \uB9E5\uB77D \uBC88\uC5ED"
 COL_SENTIMENT_CODE = "sentiment_code"
 
 def _build_empty_buckets() -> dict[str, list[pd.DataFrame]]:
