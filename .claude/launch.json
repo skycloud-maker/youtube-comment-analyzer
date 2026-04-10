@@ -1,0 +1,27 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "VoC Dashboard (Streamlit)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m", "streamlit", "run", "streamlit_app.py",
+        "--server.headless=true",
+        "--server.port=8505",
+        "--server.address=127.0.0.1"
+      ],
+      "port": 8505
+    },
+    {
+      "name": "CLI Analysis Pipeline",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m", "src.cli", "run",
+        "--keyword", "LG",
+        "--region", "KR",
+        "--max-videos", "5"
+      ],
+      "port": 0
+    }
+  ]
+}

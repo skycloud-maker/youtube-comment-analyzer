@@ -164,6 +164,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, str]:
         config.yaml.analytics.top_n_keywords,
         config.yaml.analytics.topic_count,
         LOGGER,
+        nlp_analyzer_config=config.yaml.analytics.nlp_analyzer.model_dump(),
     )
     export = ExportPipeline(
         config.yaml.storage.exports_dir,

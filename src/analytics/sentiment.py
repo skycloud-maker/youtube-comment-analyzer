@@ -1,11 +1,28 @@
-"""Practical Korean/English sentiment scoring."""
+"""Practical Korean/English sentiment scoring.
+
+Supports two modes:
+- Legacy: VADER + custom lexicon (score_sentiment)
+- NLP Analyzer: LLM-based analysis via nlp_analyzer (analyze_with_nlp)
+"""
 
 from __future__ import annotations
 
+import logging
 import re
+from typing import Any
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
+try:
+    from nlp_analyzer import analyze_comment as nlp_analyze_comment, analyze_batch as nlp_analyze_batch, AnalysisResult, is_valid
+    from nlp_analyzer.router import LLMRouter
+    from nlp_analyzer.providers.claude import ClaudeProvider
+    from nlp_analyzer.providers.openai import OpenAIProvider
+    NLP_ANALYZER_AVAILABLE = True
+except ImportError:
+    NLP_ANALYZER_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 analyzer = SentimentIntensityAnalyzer()
 
 POSITIVE_TERMS = {
@@ -131,3 +148,83 @@ def score_sentiment(text: str) -> tuple[str, float]:
     if final_score <= -0.22:
         return "negative", final_score
     return "neutral", final_score
+
+
+# ---------------------------------------------------------------------------
+# nlp_analyzer integration
+# ---------------------------------------------------------------------------
+
+def _build_nlp_router(
+    provider: str = "claude",
+    model: str = "claude-sonnet-4-20250514",
+    fallback_provider: str = "openai",
+    fallback_model: str = "gpt-4o-mini",
+) -> Any:
+    """Build an LLMRouter with configured primary/secondary providers."""
+    if not NLP_ANALYZER_AVAILABLE:
+        return None
+    primary = ClaudeProvider(model=model) if provider == "claude" else OpenAIProvider(model=model)
+    secondary = OpenAIProvider(model=fallback_model) if fallback_provider == "openai" else ClaudeProvider(model=fallback_model)
+    return LLMRouter(primary=primary, secondary=secondary)
+
+
+def analyze_with_nlp(
+    comment_id: str,
+    text: str,
+    provider: Any | None = None,
+) -> dict[str, Any] | None:
+    """Analyze a single comment using nlp_analyzer. Returns dict of fields or None on failure."""
+    if not NLP_ANALYZER_AVAILABLE:
+        logger.warning("nlp_analyzer not installed, falling back to legacy sentiment")
+        return None
+    try:
+        result: AnalysisResult = nlp_analyze_comment(comment_id, text, provider=provider)
+        if result.error:
+            logger.warning("nlp_analyzer error for %s: %s", comment_id, result.error)
+            return None
+        return _nlp_result_to_dict(result)
+    except Exception as exc:
+        logger.warning("nlp_analyzer exception for %s: %s", comment_id, exc)
+        return None
+
+
+def analyze_batch_with_nlp(
+    comments: list[dict[str, str]],
+    provider: Any | None = None,
+) -> list[dict[str, Any] | None]:
+    """Analyze multiple comments using nlp_analyzer batch mode."""
+    if not NLP_ANALYZER_AVAILABLE:
+        return [None] * len(comments)
+    try:
+        results = nlp_analyze_batch(comments, provider=provider)
+        return [_nlp_result_to_dict(r) if not r.error else None for r in results]
+    except Exception as exc:
+        logger.warning("nlp_analyzer batch exception: %s", exc)
+        return [None] * len(comments)
+
+
+def _nlp_result_to_dict(result: Any) -> dict[str, Any]:
+    """Convert AnalysisResult to a flat dict for pipeline consumption."""
+    confidence_to_score = {
+        "positive": result.confidence,
+        "negative": -result.confidence,
+        "neutral": 0.0,
+        "trash": 0.0,
+        "undecidable": 0.0,
+    }
+    return {
+        "nlp_label": result.label,
+        "nlp_confidence": result.confidence,
+        "nlp_sentiment_score": confidence_to_score.get(result.label, 0.0),
+        "nlp_sentiment_reason": result.sentiment_reason,
+        "nlp_topics": result.topics,
+        "nlp_topic_sentiments": result.topic_sentiments,
+        "nlp_is_inquiry": result.is_inquiry,
+        "nlp_is_rhetorical": result.is_rhetorical,
+        "nlp_summary": result.summary,
+        "nlp_keywords": result.keywords,
+        "nlp_product_mentions": result.product_mentions,
+        "nlp_language": result.language,
+        "nlp_provider": result.llm_provider,
+        "nlp_model": result.model_name,
+    }
