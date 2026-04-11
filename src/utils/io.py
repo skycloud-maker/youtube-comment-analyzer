@@ -29,13 +29,29 @@ def read_json(path: Path) -> Any:
 
 
 
+def _coerce_complex_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert dict/list columns to JSON strings so Arrow can serialize them."""
+    for col in df.columns:
+        if df[col].dropna().empty:
+            continue
+        sample = df[col].dropna().iloc[0]
+        if isinstance(sample, (dict, list)):
+            df[col] = df[col].map(lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+    return df
+
+
 def write_dataframe(df: pd.DataFrame, path: Path) -> Path:
     ensure_dir(path.parent)
     if path.suffix == ".parquet":
         try:
             df.to_parquet(path, index=False)
             return path
-        except (ImportError, ValueError, ModuleNotFoundError):
+        except Exception:
+            try:
+                _coerce_complex_columns(df).to_parquet(path, index=False)
+                return path
+            except (ImportError, ModuleNotFoundError):
+                pass
             fallback = path.with_suffix(".csv")
             df.to_csv(fallback, index=False, encoding="utf-8-sig")
             return fallback

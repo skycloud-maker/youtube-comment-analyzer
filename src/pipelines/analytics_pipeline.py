@@ -396,7 +396,6 @@ class AnalyticsPipeline:
         return grouped.sort_values(["product", "region", "negative_rate", "comments"], ascending=[True, True, False, False]).reset_index(drop=True)
 
     @staticmethod
-    @staticmethod
     def _monitoring_summary(opinion_units_df: pd.DataFrame) -> pd.DataFrame:
         columns = ["source_count", "opinion_count", "positive_count", "negative_count", "neutral_count", "exclude_count", "neutral_rate", "exclude_rate", "split_rate"]
         if opinion_units_df.empty:
@@ -437,6 +436,7 @@ class AnalyticsPipeline:
             "negative_share": (negative_count / total) if total else 0.0,
         }])
 
+    @staticmethod
     def _negative_density(videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> pd.DataFrame:
         columns = ["product", "region", "video_id", "title", "video_url", "negative_comments", "total_comments", "negative_density"]
         if videos_df.empty:
