@@ -87,7 +87,7 @@ WEEKLY_CHART_DEFAULT = DASHBOARD_SETTINGS.weekly_chart_page_default
 WEEKLY_CHART_STEP = DASHBOARD_SETTINGS.weekly_chart_page_step
 DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
     ("comments", "comments.parquet"),
-    ("videos", "videos.parquet"),
+    ("videos", "videos_normalized.parquet"),
     ("brand_ratio", "brand_ratio.parquet"),
     ("cej_negative_rate", "cej_negative_rate.parquet"),
     ("negative_density", "negative_density.parquet"),
@@ -1638,7 +1638,7 @@ def build_cej_trust_frame(filtered_comments: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values([COL_CEJ, "product", COL_COUNTRY, COL_BRAND], na_position="last")
 
 
-def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None) -> None:
+def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None, key_suffix: str = "") -> None:
     st.subheader("핵심 대표 코멘트")
     st.caption("현재 필터 범위에서 반복적으로 나타나는 제품 의견을 대표 이슈 중심으로 압축해 보여줍니다. 먼저 핵심 코멘트를 읽고, 필요할 때만 유사 댓글과 상세 정보를 펼쳐보세요.")
 
@@ -1654,14 +1654,14 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
     if negative_showcase.empty and positive_showcase.empty:
         fallback_showcase = _build_bundle_showcase(filtered_comments, sentiment="", limit=5)
         st.warning("현재 조건에서 강한 긍정/부정 대표 코멘트가 부족해, 의미 있는 유효 댓글을 우선 보여줍니다.")
-        render_comment_table(fallback_showcase, key_prefix="neutral", source_comments=source_for_cards)
+        render_comment_table(fallback_showcase, key_prefix=f"neutral{key_suffix}", source_comments=source_for_cards)
         return
 
     st.write(f"부정 핵심 대표 이슈 {len(negative_showcase):,}건")
-    render_comment_table(negative_showcase, key_prefix="negative", source_comments=source_for_cards)
+    render_comment_table(negative_showcase, key_prefix=f"negative{key_suffix}", source_comments=source_for_cards)
 
     st.write(f"긍정 핵심 대표 이슈 {len(positive_showcase):,}건")
-    render_comment_table(positive_showcase, key_prefix="positive", source_comments=source_for_cards)
+    render_comment_table(positive_showcase, key_prefix=f"positive{key_suffix}", source_comments=source_for_cards)
 
 
 def _collect_similar_comments_for_download(
@@ -1813,9 +1813,9 @@ def _localized_video_title(title: str) -> str:
 
 
 def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source_comments: pd.DataFrame | None = None) -> None:
-    if key_prefix == "negative":
+    if key_prefix.startswith("negative"):
         sentiment_name = "negative"
-    elif key_prefix == "positive":
+    elif key_prefix.startswith("positive"):
         sentiment_name = "positive"
     else:
         sentiment_name = "neutral"
@@ -2037,7 +2037,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                         data=csv_bytes,
                         file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
                         mime="text/csv",
-                        key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
+                        key=f"similar_download_{key_prefix}_{idx}",
                         use_container_width=True,
                     )
 
@@ -2220,6 +2220,8 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
             meta[COL_VIDEO_TITLE] = meta.get("title", meta.get(COL_VIDEO_TITLE, pd.Series("", index=meta.index))).map(_localized_video_title)
             meta[COL_VIDEO_LINK] = meta.get("video_url", meta.get(COL_VIDEO_LINK, pd.Series("", index=meta.index)))
 
+            if "product" not in meta.columns:
+                meta["product"] = ""
             density_display = density_core.merge(
                 meta[["video_id", "product", COL_COUNTRY, COL_VIDEO_TITLE, COL_VIDEO_LINK]],
                 on="video_id",
@@ -2318,6 +2320,7 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
             filtered_comments=video_comments,
             representative_bundles=None,
             opinion_units=None,
+            key_suffix=f"_vid_{video_id}",
         )
 
     with st.container(border=True):
@@ -2354,14 +2357,16 @@ def get_mode() -> str:
 def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> dict[str, list[str]]:
     comment_products = comments_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
     video_products = videos_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
-    available_products = [item for item in PRODUCT_ORDER if item in comment_products or item in video_products]
-    if not available_products:
-        available_products = [item for item in PRODUCT_ORDER if item in comment_products]
+    all_data_products = sorted(set(comment_products + video_products))
+    available_products = [item for item in PRODUCT_ORDER if item in all_data_products]
+    extra_from_data = [p for p in all_data_products if p and p not in PRODUCT_ORDER]
+    available_products.extend(extra_from_data)
     if not available_products:
         available_products = PRIMARY_PRODUCT_FILTERS[: min(4, len(PRIMARY_PRODUCT_FILTERS))]
 
+    full_product_list = PRODUCT_ORDER + [p for p in extra_from_data if p not in PRODUCT_ORDER]
     return {
-        "products": PRODUCT_ORDER,
+        "products": full_product_list,
         "available_products": available_products,
         "regions": [localize_region(code) for code in REGION_CODES],
         "sentiments": [
