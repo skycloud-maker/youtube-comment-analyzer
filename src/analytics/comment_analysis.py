@@ -98,6 +98,8 @@ class CommentAnalysisResult:
     reason: str
     needs_review: bool
     insight_type: str = "일반_의견"
+    lg_relevance_score: float = 0.0
+    lg_relevant_comment: bool = False
     # nlp_analyzer enrichment fields
     nlp_label: str | None = None
     nlp_confidence: float | None = None
@@ -209,6 +211,31 @@ def _build_reason(sentiment: str, classification_type: str, signal_strength: str
     return f"{prefix}\uc774 \ub313\uae00\uc740 {target_label} \uad00\ub828 \uc815\ubcf4 \uacf5\uc720 \ub610\ub294 \uc911\ub9bd\uc801 \uad00\ucc30\uc5d0 \uac00\uae5d\uae30 \ub54c\ubb38\uc5d0 \uc911\ub9bd\uc73c\ub85c \ubd84\ub958\ud588\uc2b5\ub2c8\ub2e4."
 
 
+def _compute_lg_comment_relevance(
+    *,
+    product_related: bool,
+    target: str | None,
+    classification_type: str,
+    is_inquiry: bool,
+    video_context: dict[str, Any],
+) -> tuple[float, bool]:
+    video_score = float(video_context.get("video_lg_relevance_score", 0.0) or 0.0)
+    video_relevant = bool(video_context.get("is_lg_relevant_video", False))
+
+    score = max(0.0, min(1.0, video_score * 0.65))
+    if product_related:
+        score += 0.25
+    if target:
+        score += 0.08
+    if classification_type in {"complaint", "comparison", "preference"}:
+        score += 0.05
+    if is_inquiry:
+        score += 0.03
+    score = max(0.0, min(1.0, score))
+    related = bool(video_relevant and score >= 0.5)
+    return score, related
+
+
 def _analyze_core(text: str, parent_comment: str, context_comments: list[str] | None, is_reply: bool) -> tuple[bool, str | None, str, str, str, bool, bool, bool, float]:
     base_sentiment, base_score = score_sentiment(text or "")
     is_agreement = _contains_any(text, AGREEMENT_MARKERS)
@@ -275,7 +302,7 @@ def analyze_comment_with_context(
     comment_id: str | None = None,
     nlp_provider: Any | None = None,
     use_nlp: bool = True,
-    video_context: dict[str, str] | None = None,
+    video_context: dict[str, Any] | None = None,
 ) -> CommentAnalysisResult:
     if validity != "valid":
         reason = f"\uc81c\uc678 \ub313\uae00\ub85c \ud310\ub2e8\ud588\uc2b5\ub2c8\ub2e4. \uc0ac\uc720: {exclusion_reason or 'low quality'}"
@@ -334,6 +361,13 @@ def analyze_comment_with_context(
     is_inquiry = nlp_fields.get("nlp_is_inquiry", False)
     nlp_topics_list = nlp_fields.get("nlp_topics", [])
     insight_type = _infer_insight_type(video_type, classification_type, sentiment, is_inquiry, nlp_topics_list, source_text)
+    lg_relevance_score, lg_relevant_comment = _compute_lg_comment_relevance(
+        product_related=product_related,
+        target=target,
+        classification_type=classification_type,
+        is_inquiry=bool(is_inquiry),
+        video_context=vc,
+    )
 
     return CommentAnalysisResult(
         product_related=product_related,
@@ -348,6 +382,8 @@ def analyze_comment_with_context(
         reason=reason,
         needs_review=needs_review,
         insight_type=insight_type,
+        lg_relevance_score=lg_relevance_score,
+        lg_relevant_comment=lg_relevant_comment,
         nlp_label=nlp_fields.get("nlp_label"),
         nlp_confidence=nlp_fields.get("nlp_confidence"),
         nlp_sentiment_reason=nlp_fields.get("nlp_sentiment_reason"),

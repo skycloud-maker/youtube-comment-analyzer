@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--channel-id")
         sub.add_argument("--include-replies", default="true")
         sub.add_argument("--refresh-existing", default="false")
+        sub.add_argument("--search-oversample-factor", type=int)
         sub.add_argument("--output-prefix", default="youtube_analysis")
         sub.add_argument("--run-id")
     return parser
@@ -75,8 +76,13 @@ def _build_dependencies() -> tuple[AppConfig, QuotaLedger, YoutubeClient]:
     return config, quota_ledger, client
 
 
-def _build_run_config(args: argparse.Namespace) -> RunConfig:
+def _build_run_config(args: argparse.Namespace, app_config: AppConfig) -> RunConfig:
     all_keywords = [args.keyword or ""] + (args.keywords or [])
+    oversample = (
+        getattr(args, "search_oversample_factor", None)
+        if getattr(args, "search_oversample_factor", None) is not None
+        else int(app_config.yaml.collection.video_selection.search_oversample_factor)
+    )
     return RunConfig(
         keyword=args.keyword or "",
         keywords=[k for k in all_keywords if k],
@@ -92,6 +98,7 @@ def _build_run_config(args: argparse.Namespace) -> RunConfig:
         channel_id=args.channel_id,
         include_replies=_str_to_bool(args.include_replies),
         refresh_existing=_str_to_bool(args.refresh_existing),
+        search_oversample_factor=max(1, oversample),
         output_prefix=args.output_prefix,
     )
 
@@ -144,7 +151,7 @@ def _persist_manifest(config: AppConfig, manifest: RunManifest) -> Path:
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, str]:
     config, quota_ledger, client = _build_dependencies()
-    run_config = _build_run_config(args)
+    run_config = _build_run_config(args, config)
     quota_estimate = estimate_quota_usage(
         max_videos=run_config.max_videos,
         comments_per_video=run_config.comments_per_video,
@@ -157,7 +164,12 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, str]:
     if args.run_id:
         manifest.run_id = args.run_id
 
-    search_collector = VideoSearchCollector(client, config.yaml.storage.raw_dir / "search_cache", LOGGER)
+    search_collector = VideoSearchCollector(
+        client,
+        config.yaml.storage.raw_dir / "search_cache",
+        LOGGER,
+        selection_policy=config.yaml.collection.video_selection,
+    )
     comments_collector = CommentsCollector(client, LOGGER)
     ingest = IngestPipeline(search_collector, comments_collector, config.yaml.storage.processed_dir, LOGGER)
     normalize = NormalizePipeline(config.yaml.storage.processed_dir, LOGGER)
@@ -168,6 +180,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, str]:
         config.yaml.analytics.topic_count,
         LOGGER,
         nlp_analyzer_config=config.yaml.analytics.nlp_analyzer.model_dump(),
+        video_selection_config=config.yaml.collection.video_selection.model_dump(),
     )
     export = ExportPipeline(
         config.yaml.storage.exports_dir,

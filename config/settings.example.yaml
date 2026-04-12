@@ -14,6 +14,50 @@ storage:
   processed_dir: data/processed
   exports_dir: data/exports
   logs_dir: data/logs
+collection:
+  video_selection:
+    enabled: true
+    search_oversample_factor: 3
+    require_product_term: true
+    require_target_brand: false
+    exclude_competitor_brands: true
+    target_brand_terms:
+      - lg
+      - 엘지
+      - 오브제
+      - 디오스
+      - 트롬
+      - 휘센
+      - lg전자
+    competitor_brand_terms:
+      - samsung
+      - 삼성
+      - bespoke
+      - whirlpool
+      - ge
+      - electrolux
+      - bosch
+      - haier
+      - miele
+      - frigidaire
+    product_terms:
+      - 가전
+      - 냉장고
+      - 세탁기
+      - 건조기
+      - 식기세척기
+      - 청소기
+      - 오븐
+      - 정수기
+      - 인덕션
+      - washer
+      - dryer
+      - refrigerator
+      - fridge
+      - dishwasher
+      - appliance
+    preferred_channel_keywords: []
+    blocked_channel_keywords: []
 analytics:
   top_n_keywords: 30
   max_representative_comments: 5

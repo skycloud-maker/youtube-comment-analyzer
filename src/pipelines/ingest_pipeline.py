@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +33,7 @@ class IngestPipeline:
         search_keywords = config.keywords if config.keywords else [config.keyword]
         all_videos: list[dict] = []
         seen_video_ids: set[str] = set()
-        per_keyword_limit = max(1, config.max_videos // len(search_keywords))
+        per_keyword_limit = max(1, math.ceil(config.max_videos / len(search_keywords)))
         for kw in search_keywords:
             kw_config = config.model_copy(update={"keyword": kw, "max_videos": per_keyword_limit})
             kw_results = self.video_search.search(manifest.run_id, kw_config)
@@ -42,6 +43,14 @@ class IngestPipeline:
                     seen_video_ids.add(vid)
                     all_videos.append(v)
             self.logger.info("Keyword '%s': %d videos (total unique: %d)", kw, len(kw_results), len(all_videos))
+        all_videos = sorted(
+            all_videos,
+            key=lambda item: (
+                -float(item.get("selection_score") or 0.0),
+                int(item.get("search_rank") or 999999),
+                -int(item.get("comment_count") or 0),
+            ),
+        )
         videos = all_videos[:config.max_videos]
         videos_df = pd.DataFrame(videos)
         comment_rows: list[dict] = []

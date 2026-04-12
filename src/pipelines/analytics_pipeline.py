@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -57,6 +58,7 @@ class AnalyticsPipeline:
         topic_count: int,
         logger: logging.Logger | None = None,
         nlp_analyzer_config: dict | None = None,
+        video_selection_config: dict | None = None,
     ) -> None:
         self.processed_dir = ensure_dir(processed_dir)
         self.risk_keywords = risk_keywords
@@ -64,6 +66,16 @@ class AnalyticsPipeline:
         self.topic_count = topic_count
         self.logger = logger or logging.getLogger(__name__)
         self.nlp_config = nlp_analyzer_config or {}
+        self.video_selection = video_selection_config or {}
+        self.video_selection_enabled = bool(self.video_selection.get("enabled", True))
+        self.video_target_brand_terms = [str(item).lower() for item in self.video_selection.get("target_brand_terms", []) if str(item).strip()]
+        self.video_competitor_terms = [str(item).lower() for item in self.video_selection.get("competitor_brand_terms", []) if str(item).strip()]
+        self.video_product_terms = [str(item).lower() for item in self.video_selection.get("product_terms", []) if str(item).strip()]
+        self.video_preferred_channels = [str(item).lower() for item in self.video_selection.get("preferred_channel_keywords", []) if str(item).strip()]
+        self.video_blocked_channels = [str(item).lower() for item in self.video_selection.get("blocked_channel_keywords", []) if str(item).strip()]
+        self.video_require_product = bool(self.video_selection.get("require_product_term", True))
+        self.video_require_target = bool(self.video_selection.get("require_target_brand", False))
+        self.video_exclude_competitors = bool(self.video_selection.get("exclude_competitor_brands", True))
         self.use_nlp = self.nlp_config.get("enabled", True) and NLP_ANALYZER_AVAILABLE
         self.nlp_provider = None
         if self.use_nlp:
@@ -76,7 +88,8 @@ class AnalyticsPipeline:
             self.logger.info("nlp_analyzer enabled (provider=%s)", self.nlp_config.get("provider", "claude"))
 
     def run(self, run_id: str, videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        working_comments = self._attach_video_context(comments_df, videos_df)
+        videos_with_relevance = self._annotate_video_relevance(videos_df)
+        working_comments = self._attach_video_context(comments_df, videos_with_relevance)
         for column in ["product", "region", "title", "video_url"]:
             if column not in working_comments.columns:
                 working_comments[column] = pd.NA
@@ -101,6 +114,8 @@ class AnalyticsPipeline:
                         "title": "" if pd.isna(row.get("title", pd.NA)) else str(row.get("title", "")),
                         "product": "" if pd.isna(row.get("product", pd.NA)) else str(row.get("product", "")),
                         "channel": "" if pd.isna(row.get("channel_title", pd.NA)) else str(row.get("channel_title", "")),
+                        "video_lg_relevance_score": 0.0 if pd.isna(row.get("video_lg_relevance_score", pd.NA)) else float(row.get("video_lg_relevance_score", 0.0) or 0.0),
+                        "is_lg_relevant_video": bool(row.get("is_lg_relevant_video", False)),
                     },
                 ),
                 axis=1,
@@ -118,6 +133,8 @@ class AnalyticsPipeline:
             analysis_comments["classification_reason"] = analysis_results.map(lambda item: item.reason)
             analysis_comments["needs_review"] = analysis_results.map(lambda item: item.needs_review)
             analysis_comments["insight_type"] = analysis_results.map(lambda item: item.insight_type)
+            analysis_comments["lg_relevance_score"] = analysis_results.map(lambda item: item.lg_relevance_score)
+            analysis_comments["lg_relevant_comment"] = analysis_results.map(lambda item: item.lg_relevant_comment)
             # nlp_analyzer enrichment fields
             analysis_comments["nlp_label"] = analysis_results.map(lambda item: item.nlp_label)
             analysis_comments["nlp_confidence"] = analysis_results.map(lambda item: item.nlp_confidence)
@@ -148,6 +165,7 @@ class AnalyticsPipeline:
                 "representative_score", "clarity_score", "product_specificity_score",
                 "insight_value_score", "representativeness_score", "explainability_score",
                 "context_independence_score", "representative_decision", "representative_reason",
+                "lg_relevance_score", "lg_relevant_comment",
                 "nlp_label", "nlp_confidence", "nlp_sentiment_reason", "nlp_topics",
                 "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical", "nlp_summary",
                 "nlp_keywords", "nlp_product_mentions", "nlp_language", "nlp_provider", "nlp_model",
@@ -167,7 +185,8 @@ class AnalyticsPipeline:
                 "parent_comment_text", "representative_score", "clarity_score",
                 "product_specificity_score", "insight_value_score", "representativeness_score",
                 "explainability_score", "context_independence_score", "representative_decision",
-                "representative_reason", "nlp_label", "nlp_confidence", "nlp_sentiment_reason",
+                "representative_reason", "lg_relevance_score", "lg_relevant_comment",
+                "nlp_label", "nlp_confidence", "nlp_sentiment_reason",
                 "nlp_topics", "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical",
                 "nlp_summary", "nlp_keywords", "nlp_product_mentions", "nlp_language",
                 "nlp_provider", "nlp_model",
@@ -177,7 +196,7 @@ class AnalyticsPipeline:
 
         working_comments["sentiment_label"] = working_comments["sentiment_label"].where(working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"), pd.NA)
 
-        metrics = build_descriptive_metrics(videos_df, working_comments)
+        metrics = build_descriptive_metrics(videos_with_relevance, working_comments)
         opinion_units = build_opinion_units(analysis_comments)
         if not opinion_units.empty:
             source_counts = opinion_units.groupby("source_content_id").agg(opinion_count=("opinion_id", "count")).reset_index()
@@ -210,7 +229,7 @@ class AnalyticsPipeline:
         new_issue_keywords, persistent_issue_keywords = build_issue_keyword_status(weekly_keyword_trend)
         brand_ratio = self._brand_ratio(analysis_comments)
         cej_negative_rate = self._cej_negative_rate(analysis_comments)
-        negative_density = self._negative_density(videos_df, analysis_comments)
+        negative_density = self._negative_density(videos_with_relevance, analysis_comments)
 
         # insight_engine aggregation from nlp_analyzer results
         nlp_topic_insights = build_topic_insight_summary(analysis_comments)
@@ -247,6 +266,7 @@ class AnalyticsPipeline:
         }
 
         run_dir = ensure_dir(self.processed_dir / run_id)
+        write_dataframe(videos_with_relevance, run_dir / "videos_normalized.parquet")
         for name, frame in outputs.items():
             if isinstance(frame, pd.DataFrame):
                 write_dataframe(frame, run_dir / f"{name}.parquet")
@@ -259,10 +279,87 @@ class AnalyticsPipeline:
     def _attach_video_context(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> pd.DataFrame:
         if comments_df.empty or videos_df.empty:
             return comments_df.copy()
-        video_columns = [column for column in ["video_id", "product", "keyword", "region", "title", "channel_title", "video_url"] if column in videos_df.columns]
+        video_columns = [
+            column
+            for column in [
+                "video_id",
+                "product",
+                "keyword",
+                "region",
+                "title",
+                "channel_title",
+                "video_url",
+                "is_lg_relevant_video",
+                "video_lg_relevance_score",
+                "lg_target_brand_hit",
+                "lg_product_hit",
+                "lg_preferred_channel_hit",
+            ]
+            if column in videos_df.columns
+        ]
         if not video_columns:
             return comments_df.copy()
         return comments_df.merge(videos_df[video_columns].drop_duplicates(subset=["video_id"]), on="video_id", how="left")
+
+    def _annotate_video_relevance(self, videos_df: pd.DataFrame) -> pd.DataFrame:
+        if videos_df.empty:
+            return videos_df.copy()
+        working = videos_df.copy()
+        if not self.video_selection_enabled:
+            working["video_lg_relevance_score"] = 0.0
+            working["is_lg_relevant_video"] = True
+            working["lg_target_brand_hit"] = False
+            working["lg_product_hit"] = False
+            working["lg_preferred_channel_hit"] = False
+            return working
+
+        title = working.get("title", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+        description = working.get("description", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+        channel = working.get("channel_title", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+        keyword = working.get("keyword", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+        product = working.get("product", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+        tags_blob = working.get("tags", pd.Series([[] for _ in range(len(working))], index=working.index)).map(
+            lambda value: " ".join(str(item) for item in (value if isinstance(value, list) else [value]))
+        ).fillna("").astype(str).str.lower()
+        blob = (title + " " + description + " " + channel + " " + keyword + " " + product + " " + tags_blob).str.strip()
+
+        target_hit = blob.map(lambda text: self._contains_term(text, self.video_target_brand_terms))
+        product_hit = blob.map(lambda text: self._contains_term(text, self.video_product_terms))
+        competitor_hit = blob.map(lambda text: self._contains_term(text, self.video_competitor_terms))
+        preferred_hit = channel.map(lambda text: self._contains_term(text, self.video_preferred_channels))
+        blocked_hit = channel.map(lambda text: self._contains_term(text, self.video_blocked_channels))
+
+        score = (
+            target_hit.astype(float) * 0.45
+            + product_hit.astype(float) * 0.35
+            + preferred_hit.astype(float) * 0.30
+        )
+        if self.video_exclude_competitors:
+            score = score - ((competitor_hit & ~target_hit).astype(float) * 0.40)
+        score = score.clip(lower=0.0, upper=1.0)
+
+        is_relevant = score >= 0.45
+        if self.video_require_product:
+            is_relevant = is_relevant & (product_hit | preferred_hit)
+        if self.video_require_target:
+            is_relevant = is_relevant & (target_hit | preferred_hit)
+        is_relevant = is_relevant & (~blocked_hit)
+
+        working["video_lg_relevance_score"] = score.round(3)
+        working["is_lg_relevant_video"] = is_relevant
+        working["lg_target_brand_hit"] = target_hit
+        working["lg_product_hit"] = product_hit
+        working["lg_preferred_channel_hit"] = preferred_hit
+        return working
+
+    @staticmethod
+    def _contains_term(text: str, terms: list[str]) -> bool:
+        lowered = str(text or "").lower()
+        for raw in terms:
+            term = str(raw or "").strip().lower()
+            if term and term in lowered:
+                return True
+        return False
 
     def _flag_risks(self, text: str) -> str:
         lowered = (text or "").lower()

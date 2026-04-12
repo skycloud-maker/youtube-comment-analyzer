@@ -32,6 +32,7 @@ from src.utils.translation import translate_to_korean
 BASE_DIR = Path(__file__).resolve().parents[1]
 APP_SETTINGS = load_yaml_settings_optional()
 DASHBOARD_SETTINGS = APP_SETTINGS.dashboard
+VIDEO_SELECTION_SETTINGS = APP_SETTINGS.collection.video_selection
 
 
 def _resolve_repo_path(path: Path) -> Path:
@@ -87,6 +88,11 @@ WEEKLY_CHART_MIN = DASHBOARD_SETTINGS.weekly_chart_page_min
 WEEKLY_CHART_MAX = DASHBOARD_SETTINGS.weekly_chart_page_max
 WEEKLY_CHART_DEFAULT = DASHBOARD_SETTINGS.weekly_chart_page_default
 WEEKLY_CHART_STEP = DASHBOARD_SETTINGS.weekly_chart_page_step
+LG_TARGET_TERMS = [str(item).lower() for item in VIDEO_SELECTION_SETTINGS.target_brand_terms if str(item).strip()]
+LG_COMPETITOR_TERMS = [str(item).lower() for item in VIDEO_SELECTION_SETTINGS.competitor_brand_terms if str(item).strip()]
+LG_PRODUCT_TERMS = [str(item).lower() for item in VIDEO_SELECTION_SETTINGS.product_terms if str(item).strip()]
+LG_PREFERRED_CHANNEL_TERMS = [str(item).lower() for item in VIDEO_SELECTION_SETTINGS.preferred_channel_keywords if str(item).strip()]
+LG_BLOCKED_CHANNEL_TERMS = [str(item).lower() for item in VIDEO_SELECTION_SETTINGS.blocked_channel_keywords if str(item).strip()]
 DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
     ("comments", "comments.parquet"),
     ("videos", "videos_normalized.parquet"),
@@ -1166,6 +1172,109 @@ def add_localized_columns(comments_df: pd.DataFrame) -> pd.DataFrame:
     return working
 
 
+def _contains_terms(text: str, terms: list[str]) -> bool:
+    lowered = str(text or "").lower()
+    for raw in terms:
+        token = str(raw or "").strip().lower()
+        if token and token in lowered:
+            return True
+    return False
+
+
+def _annotate_videos_lg_relevance(videos_df: pd.DataFrame) -> pd.DataFrame:
+    working = videos_df.copy()
+    if working.empty:
+        return working
+    if "is_lg_relevant_video" in working.columns and "video_lg_relevance_score" in working.columns:
+        return working
+    if not VIDEO_SELECTION_SETTINGS.enabled:
+        working["is_lg_relevant_video"] = True
+        working["video_lg_relevance_score"] = 0.0
+        return working
+
+    title = working.get("title", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+    description = working.get("description", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+    channel = working.get("channel_title", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+    keyword = working.get("keyword", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+    product = working.get("product", pd.Series("", index=working.index)).fillna("").astype(str).str.lower()
+    tags_blob = working.get("tags", pd.Series([[] for _ in range(len(working))], index=working.index)).map(
+        lambda value: " ".join(str(item) for item in (value if isinstance(value, list) else [value]))
+    ).fillna("").astype(str).str.lower()
+    blob = (title + " " + description + " " + channel + " " + keyword + " " + product + " " + tags_blob).str.strip()
+
+    target_hit = blob.map(lambda text: _contains_terms(text, LG_TARGET_TERMS))
+    product_hit = blob.map(lambda text: _contains_terms(text, LG_PRODUCT_TERMS))
+    competitor_hit = blob.map(lambda text: _contains_terms(text, LG_COMPETITOR_TERMS))
+    preferred_hit = channel.map(lambda text: _contains_terms(text, LG_PREFERRED_CHANNEL_TERMS))
+    blocked_hit = channel.map(lambda text: _contains_terms(text, LG_BLOCKED_CHANNEL_TERMS))
+
+    score = (
+        target_hit.astype(float) * 0.45
+        + product_hit.astype(float) * 0.35
+        + preferred_hit.astype(float) * 0.30
+    )
+    if VIDEO_SELECTION_SETTINGS.exclude_competitor_brands:
+        score = score - ((competitor_hit & ~target_hit).astype(float) * 0.40)
+    score = score.clip(lower=0.0, upper=1.0)
+
+    is_relevant = score >= 0.45
+    if VIDEO_SELECTION_SETTINGS.require_product_term:
+        is_relevant = is_relevant & (product_hit | preferred_hit)
+    if VIDEO_SELECTION_SETTINGS.require_target_brand:
+        is_relevant = is_relevant & (target_hit | preferred_hit)
+    is_relevant = is_relevant & (~blocked_hit)
+
+    working["is_lg_relevant_video"] = is_relevant
+    working["video_lg_relevance_score"] = score.round(3)
+    return working
+
+
+def ensure_lg_relevance_columns(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    videos = _annotate_videos_lg_relevance(videos_df)
+    comments = comments_df.copy()
+
+    if comments.empty:
+        return comments, videos
+
+    if "video_id" in comments.columns and not videos.empty and "video_id" in videos.columns:
+        context_cols = [
+            col
+            for col in ["video_id", "is_lg_relevant_video", "video_lg_relevance_score"]
+            if col in videos.columns
+        ]
+        merge_cols = ["video_id"] + [col for col in context_cols if col != "video_id" and col not in comments.columns]
+        if len(merge_cols) > 1:
+            comments = comments.merge(
+                videos[merge_cols].drop_duplicates(subset=["video_id"]),
+                on="video_id",
+                how="left",
+            )
+
+    if "video_lg_relevance_score" not in comments.columns:
+        comments["video_lg_relevance_score"] = 0.0
+    score_series = pd.to_numeric(comments["video_lg_relevance_score"], errors="coerce").fillna(0.0)
+    video_related_series = comments.get("is_lg_relevant_video", pd.Series(False, index=comments.index)).fillna(False).astype(bool)
+
+    product_related_series = comments.get("product_related", pd.Series(False, index=comments.index)).fillna(False).astype(bool)
+    target_series = comments.get("product_target", pd.Series("", index=comments.index)).fillna("").astype(str).str.strip().ne("")
+    classification_series = comments.get("classification_type", pd.Series("", index=comments.index)).fillna("").astype(str).str.lower()
+    inquiry_series = comments.get("nlp_is_inquiry", pd.Series(False, index=comments.index)).fillna(False).astype(bool)
+
+    computed_score = (score_series * 0.65).clip(0.0, 1.0)
+    computed_score = computed_score + (product_related_series.astype(float) * 0.25)
+    computed_score = computed_score + (target_series.astype(float) * 0.08)
+    computed_score = computed_score + (classification_series.isin({"complaint", "comparison", "preference"}).astype(float) * 0.05)
+    computed_score = computed_score + (inquiry_series.astype(float) * 0.03)
+    computed_score = computed_score.clip(0.0, 1.0)
+
+    if "lg_relevance_score" not in comments.columns:
+        comments["lg_relevance_score"] = computed_score.round(3)
+    if "lg_relevant_comment" not in comments.columns:
+        comments["lg_relevant_comment"] = video_related_series & (computed_score >= 0.5)
+
+    return comments, videos
+
+
 def filter_issue_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "keyword" not in frame.columns:
         return frame
@@ -1232,6 +1341,7 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     brands_active = bool(filters.get("brands_active", bool(brands)))
     keyword_query = str(filters.get("keyword_query") or "").strip()
     analysis_scope = str(filters.get("analysis_scope") or "전체").strip() or "전체"
+    relevance_scope = str(filters.get("relevance_scope") or "LG 관련만").strip() or "LG 관련만"
 
     opinion_units = (opinion_units_df.copy() if opinion_units_df is not None else pd.DataFrame())
     if not opinion_units.empty:
@@ -1285,6 +1395,19 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         elif analysis_scope == "문의 제외":
             base_comments = base_comments[~comment_ids.isin(inquiry_source_ids)]
 
+    pre_lg_comment_count = len(base_comments)
+    if relevance_scope == "LG 관련만":
+        if "lg_relevant_comment" in base_comments.columns:
+            lg_mask = base_comments["lg_relevant_comment"].fillna(False).astype(bool)
+            base_comments = base_comments[lg_mask]
+        elif "is_lg_relevant_video" in base_comments.columns:
+            lg_video_mask = base_comments["is_lg_relevant_video"].fillna(False).astype(bool)
+            base_comments = base_comments[lg_video_mask]
+        elif "video_lg_relevance_score" in base_comments.columns:
+            score_mask = pd.to_numeric(base_comments["video_lg_relevance_score"], errors="coerce").fillna(0.0) >= 0.45
+            base_comments = base_comments[score_mask]
+    post_lg_comment_count = len(base_comments)
+
     all_comments = base_comments.copy()
     
     filtered_comments = base_comments.copy()
@@ -1333,6 +1456,13 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
             filtered_videos = filtered_videos[filtered_videos[COL_COUNTRY].isin(regions)]
     if brands_active and COL_BRAND in filtered_videos.columns:
         filtered_videos = filtered_videos[filtered_videos[COL_BRAND].isin(brands)]
+    if relevance_scope == "LG 관련만":
+        if "is_lg_relevant_video" in filtered_videos.columns:
+            filtered_videos = filtered_videos[filtered_videos["is_lg_relevant_video"].fillna(False).astype(bool)]
+        elif "video_lg_relevance_score" in filtered_videos.columns:
+            filtered_videos = filtered_videos[
+                pd.to_numeric(filtered_videos["video_lg_relevance_score"], errors="coerce").fillna(0.0) >= 0.45
+            ]
 
     quality_filtered = quality_df.copy()
     if not quality_filtered.empty:
@@ -1363,6 +1493,9 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         "removed_count": removed_count,
         "meaningful_count": meaningful_count,
         "inquiry_count": int(opinion_units.get("inquiry_flag", pd.Series(dtype=bool)).fillna(False).sum()) if not opinion_units.empty else 0,
+        "pre_lg_comment_count": int(pre_lg_comment_count),
+        "post_lg_comment_count": int(post_lg_comment_count),
+        "relevance_scope": relevance_scope,
     }
 
 
@@ -2385,7 +2518,19 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
 
         # videos가 product 단위로 중복되어 있을 수 있으므로 video_id 1행으로 압축
         if "video_id" in videos.columns and not videos.empty:
-            keep_cols = ["video_id", "region", "title", "video_url", "published_at", "view_count", "like_count", "comment_count"]
+            keep_cols = [
+                "video_id",
+                "region",
+                "channel_title",
+                "title",
+                "video_url",
+                "published_at",
+                "view_count",
+                "like_count",
+                "comment_count",
+                "is_lg_relevant_video",
+                "video_lg_relevance_score",
+            ]
             keep_cols = [c for c in keep_cols if c in videos.columns]
             videos = videos.sort_values(["video_id"]).drop_duplicates(subset=["video_id"], keep="first")
             # product 컬럼은 댓글 기반으로 재작성(있으면 덮어씀)
@@ -2393,7 +2538,19 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
                 videos["product"] = videos["video_id"].map(product_map).fillna(videos.get("product", ""))
     
     if videos.empty and not comments.empty:
-        rebuild_cols = ["product", "region", "title", "video_url", "published_at", "view_count", "like_count", "comment_count"]
+        rebuild_cols = [
+            "product",
+            "region",
+            "channel_title",
+            "title",
+            "video_url",
+            "published_at",
+            "view_count",
+            "like_count",
+            "comment_count",
+            "is_lg_relevant_video",
+            "video_lg_relevance_score",
+        ]
         available = [c for c in rebuild_cols if c in comments.columns]
         if available:
             videos = comments.groupby(["video_id"], dropna=False).agg({c: "first" for c in available}).reset_index()
@@ -2498,6 +2655,27 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         top_video = _localized_video_title(_safe_text(summary.iloc[0].get(COL_VIDEO_TITLE, "-")))
         render_card("최상위 이슈 영상", str(top_video)[:28] or "-")
 
+    if "is_lg_relevant_video" in filtered_videos.columns:
+        relevant_videos = int(filtered_videos["is_lg_relevant_video"].fillna(False).astype(bool).sum())
+        st.caption(f"LG 관련 영상: {relevant_videos:,} / 전체 영상: {len(filtered_videos):,}")
+
+    if "channel_title" in filtered_videos.columns:
+        channel_overview = (
+            filtered_videos.assign(channel_title=filtered_videos["channel_title"].fillna("").astype(str))
+            .query("channel_title != ''")
+            .groupby("channel_title", dropna=False)
+            .agg(
+                영상수=("video_id", "nunique"),
+                댓글합=("comment_count", "sum"),
+            )
+            .reset_index()
+            .sort_values(["영상수", "댓글합"], ascending=[False, False])
+            .head(15)
+        )
+        if not channel_overview.empty:
+            with st.expander("채널 포함 현황 보기"):
+                st.dataframe(channel_overview, width="stretch", hide_index=True)
+
     # ✅ 상단 리스트(전체 분포)
     summary_display = summary.copy()
     if COL_VIDEO_TITLE in summary_display.columns:
@@ -2505,8 +2683,9 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
 
     # 보기 좋은 컬럼만 노출
     show_cols = [
-        "product", COL_COUNTRY, COL_VIDEO_TITLE, "발행일", "view_count",
+        "product", COL_COUNTRY, "channel_title", COL_VIDEO_TITLE, "발행일", "view_count",
         "분석_전체_댓글_수", "긍정_댓글_수", "부정_댓글_수", "중립_댓글_수", "제외_댓글_수",
+        "is_lg_relevant_video", "video_lg_relevance_score",
         "주요 부정 포인트",
     ]
     show_cols = [c for c in show_cols if c in summary_display.columns]
@@ -2730,6 +2909,7 @@ def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame)
         "cej": CEJ_ORDER[:],
         "brands": brand_options,
         "analysis_scope": ["전체", "문의 포함 댓글만", "문의 제외"],
+        "relevance_scope": ["LG 관련만", "전체 수집"],
     }
 
 
@@ -2834,6 +3014,15 @@ def _render_sidebar_filters(options: dict[str, list[str]]) -> dict[str, Any]:
             )
 
         with st.container(border=True):
+            st.caption("LG 관련성 범위")
+            relevance_scope = st.radio(
+                "LG 관련성 범위",
+                options["relevance_scope"],
+                index=0,
+                label_visibility="collapsed",
+            )
+
+        with st.container(border=True):
             st.caption("고급 옵션")
             keyword_query = st.text_input(
                 "댓글 내 키워드 검색",
@@ -2868,6 +3057,7 @@ def _render_sidebar_filters(options: dict[str, list[str]]) -> dict[str, Any]:
         "brands_active": _is_filter_active(selected_brands, options["brands"]),
         "keyword_query": keyword_query,
         "analysis_scope": analysis_scope,
+        "relevance_scope": relevance_scope,
     }
     return filters
 
@@ -3054,12 +3244,14 @@ def main() -> None:
     with st.spinner("데이터 로딩 중…"):
         data = get_dashboard_data_resource()
 
-    comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
+    comments_raw = data.get("comments", pd.DataFrame()).copy()
+    videos_raw = data.get("videos", pd.DataFrame()).copy()
+    comments_scored, videos_df = ensure_lg_relevance_columns(comments_raw, videos_raw)
+    comments_df = add_localized_columns(comments_scored)
     if comments_df.empty:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
         return
 
-    videos_df = data.get("videos", pd.DataFrame()).copy()
     videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
     dashboard_options = _build_dashboard_options(comments_df, videos_df)
 
@@ -3148,6 +3340,7 @@ def main() -> None:
             "감성": format_selection(selected_filters["sentiments"], empty_label="선택 없음"),
             "CEJ": format_selection(selected_filters["cej"], empty_label="선택 없음"),
             "분석 유형": selected_filters.get("analysis_scope", "전체"),
+            "LG 관련성 범위": selected_filters.get("relevance_scope", "LG 관련만"),
             "키워드": selected_filters["keyword_query"] or "-",
         }]), hide_index=True, width="stretch")
         return
@@ -3261,6 +3454,11 @@ def main() -> None:
             render_card("문의 댓글 수", f"{bundle.get('inquiry_count', 0):,}", accent="purple")
         with row1_col4:
             render_card("제외 댓글 수", f"{bundle['removed_count']:,}", accent="orange")
+        if bundle.get("relevance_scope") == "LG 관련만":
+            pre_count = int(bundle.get("pre_lg_comment_count", len(filtered_comments)))
+            post_count = int(bundle.get("post_lg_comment_count", len(filtered_comments)))
+            ratio = (post_count / pre_count * 100.0) if pre_count else 0.0
+            st.caption(f"전체 수집: {pre_count:,}건 → LG 관련: {post_count:,}건 ({ratio:.1f}%)")
 
         row2_col1, row2_col2, row2_col3 = st.columns(3)
         with row2_col1:

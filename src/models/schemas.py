@@ -29,6 +29,7 @@ class RunConfig(BaseModel):
     channel_id: str | None = None
     include_replies: bool = True
     refresh_existing: bool = False
+    search_oversample_factor: int = 1
     output_prefix: str = "youtube_analysis"
 
 

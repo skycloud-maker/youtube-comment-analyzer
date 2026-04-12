@@ -31,6 +31,25 @@ def test_parent_agreement_can_still_inherit_product_context():
     assert result.context_used is True
 
 
+def test_lg_relevance_uses_video_context_and_product_relation():
+    result = analyze_comment_with_context(
+        "세탁기 소음이 너무 심해요",
+        validity="valid",
+        parent_comment="",
+        context_comments=["세탁기 리뷰", "LG"],
+        is_reply=False,
+        video_context={
+            "title": "LG 세탁기 후기",
+            "channel": "가전리뷰",
+            "video_lg_relevance_score": 0.82,
+            "is_lg_relevant_video": True,
+        },
+    )
+    assert result.product_related is True
+    assert result.lg_relevance_score >= 0.5
+    assert result.lg_relevant_comment is True
+
+
 def test_representative_comments_deduplicate_same_issue_text():
     comments = pd.DataFrame([
         {

@@ -27,6 +27,56 @@ class StorageSettings(BaseModel):
     logs_dir: Path = Path("data/logs")
 
 
+class VideoSelectionSettings(BaseModel):
+    enabled: bool = True
+    search_oversample_factor: int = 3
+    require_product_term: bool = True
+    require_target_brand: bool = False
+    exclude_competitor_brands: bool = True
+    target_brand_terms: list[str] = Field(
+        default_factory=lambda: ["lg", "엘지", "오브제", "디오스", "트롬", "휘센", "lg전자"]
+    )
+    competitor_brand_terms: list[str] = Field(
+        default_factory=lambda: [
+            "samsung",
+            "삼성",
+            "bespoke",
+            "whirlpool",
+            "ge",
+            "electrolux",
+            "bosch",
+            "haier",
+            "miele",
+            "frigidaire",
+        ]
+    )
+    product_terms: list[str] = Field(
+        default_factory=lambda: [
+            "가전",
+            "냉장고",
+            "세탁기",
+            "건조기",
+            "식기세척기",
+            "청소기",
+            "오븐",
+            "정수기",
+            "인덕션",
+            "washer",
+            "dryer",
+            "refrigerator",
+            "fridge",
+            "dishwasher",
+            "appliance",
+        ]
+    )
+    preferred_channel_keywords: list[str] = Field(default_factory=list)
+    blocked_channel_keywords: list[str] = Field(default_factory=list)
+
+
+class CollectionSettings(BaseModel):
+    video_selection: VideoSelectionSettings = Field(default_factory=VideoSelectionSettings)
+
+
 class NlpAnalyzerSettings(BaseModel):
     enabled: bool = True
     provider: str = "claude"
@@ -83,6 +133,7 @@ class YamlSettings(BaseModel):
     daily_quota_limit: int = 10000
     api: ApiSettings = Field(default_factory=ApiSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    collection: CollectionSettings = Field(default_factory=CollectionSettings)
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     excel: ExcelSettings = Field(default_factory=ExcelSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)

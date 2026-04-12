@@ -68,6 +68,7 @@ def build_args(*, product: str, keyword: str, language: str, region: str, max_vi
         channel_id=None,
         include_replies="true",
         refresh_existing="false",
+        search_oversample_factor=None,
         output_prefix=f"voc_{slug}",
         run_id=None,
     )
