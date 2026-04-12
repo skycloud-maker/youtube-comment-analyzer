@@ -204,9 +204,13 @@ def _write_cache_bundle(data: dict[str, pd.DataFrame], signature: str) -> None:
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
     latest_signature = _latest_signature()
 
-    for cache_path, expected_signature in ((CACHE_FILE, latest_signature), (CACHE_FILE, None), (CLOUD_CACHE_FILE, None)):
-        cached = _read_cache_bundle(cache_path, expected_signature)
+    # Only trust caches that match the latest source signature.
+    # Falling back to unsigned local cache can keep stale metrics after new runs.
+    for cache_path in (CACHE_FILE, CLOUD_CACHE_FILE):
+        cached = _read_cache_bundle(cache_path, latest_signature)
         if cached is not None:
+            if cache_path == CLOUD_CACHE_FILE:
+                _write_cache_bundle(cached, latest_signature)
             return cached
 
     buckets = _build_empty_buckets()
