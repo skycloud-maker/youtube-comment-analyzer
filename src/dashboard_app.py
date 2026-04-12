@@ -1,4 +1,4 @@
-"""Streamlit dashboard for appliance VoC exploration."""
+﻿"""Streamlit dashboard for appliance VoC exploration."""
 
 from __future__ import annotations
 
@@ -1459,7 +1459,7 @@ def render_keyword_panel(comments_df: pd.DataFrame, sentiment_code: str, title: 
     left, right = st.columns([0.72, 0.28])
     with left:
         if donut_image:
-            st.image(donut_image, use_container_width=True)
+            st.image(donut_image, width="stretch")
     with right:
         st.markdown('<div class="voc-legend-compact">', unsafe_allow_html=True)
         palette = [
@@ -1478,10 +1478,10 @@ def render_keyword_panel(comments_df: pd.DataFrame, sentiment_code: str, title: 
     full_rows = tuple((str(row.keyword), int(row.count)) for row in full_df.itertuples(index=False))
     wordcloud = build_wordcloud_image(full_rows, sentiment_code=sentiment_code)
     if wordcloud:
-        st.image(wordcloud, use_container_width=True)
+        st.image(wordcloud, width="stretch")
 
     with st.expander("\uc804\uccb4 \ud0a4\uc6cc\ub4dc \ubaa9\ub85d \ubcf4\uae30"):
-        st.dataframe(full_df.rename(columns={"keyword": "\ud0a4\uc6cc\ub4dc", "count": "\uc5b8\uae09 \uc218"}), use_container_width=True, hide_index=True)
+        st.dataframe(full_df.rename(columns={"keyword": "\ud0a4\uc6cc\ub4dc", "count": "\uc5b8\uae09 \uc218"}), width="stretch", hide_index=True)
 
 
 def render_issue_tables(data: dict[str, pd.DataFrame], selected_products: list[str], selected_regions: list[str]) -> None:
@@ -1503,13 +1503,13 @@ def render_issue_tables(data: dict[str, pd.DataFrame], selected_products: list[s
             st.info("\uc2e0\uaddc \uc774\uc288 \ud0a4\uc6cc\ub4dc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.")
         else:
             new_display = new_df.rename(columns={"product": "\uc81c\ud488\uad70", "keyword": "\ud0a4\uc6cc\ub4dc", "count": "\uc5b8\uae09 \uc218", "latest_week": "\ucd5c\uadfc \uc8fc\ucc28"})
-            st.dataframe(new_display[["\uc81c\ud488\uad70", COL_COUNTRY, "\ud0a4\uc6cc\ub4dc", "\uc5b8\uae09 \uc218", "\ucd5c\uadfc \uc8fc\ucc28"]].head(15), use_container_width=True, hide_index=True)
+            st.dataframe(new_display[["\uc81c\ud488\uad70", COL_COUNTRY, "\ud0a4\uc6cc\ub4dc", "\uc5b8\uae09 \uc218", "\ucd5c\uadfc \uc8fc\ucc28"]].head(15), width="stretch", hide_index=True)
     with tab_persistent:
         if persistent_df.empty:
             st.info("\uc9c0\uc18d \uc774\uc288 \ud0a4\uc6cc\ub4dc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.")
         else:
             persistent_display = persistent_df.rename(columns={"product": "\uc81c\ud488\uad70", "keyword": "\ud0a4\uc6cc\ub4dc", "count": "\uc5b8\uae09 \uc218", "weeks_active": "\uc9c0\uc18d \uc8fc\ucc28 \uc218", "latest_week": "\ucd5c\uadfc \uc8fc\ucc28"})
-            st.dataframe(persistent_display[["\uc81c\ud488\uad70", COL_COUNTRY, "\ud0a4\uc6cc\ub4dc", "\uc5b8\uae09 \uc218", "\uc9c0\uc18d \uc8fc\ucc28 \uc218", "\ucd5c\uadfc \uc8fc\ucc28"]].head(15), use_container_width=True, hide_index=True)
+            st.dataframe(persistent_display[["\uc81c\ud488\uad70", COL_COUNTRY, "\ud0a4\uc6cc\ub4dc", "\uc5b8\uae09 \uc218", "\uc9c0\uc18d \uc8fc\ucc28 \uc218", "\ucd5c\uadfc \uc8fc\ucc28"]].head(15), width="stretch", hide_index=True)
 
 
 def _representative_cluster_key(row: pd.Series) -> str:
@@ -2510,7 +2510,7 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         "주요 부정 포인트",
     ]
     show_cols = [c for c in show_cols if c in summary_display.columns]
-    st.dataframe(summary_display[show_cols].head(100), use_container_width=True, hide_index=True)
+    st.dataframe(summary_display[show_cols].head(100), width="stretch", hide_index=True)
 
     # ✅ 3) 부정 밀도(분석 대상 valid 기준) 계산 + 영상 메타 결합
     density_display = pd.DataFrame()
@@ -2558,7 +2558,7 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
 
             edited = st.data_editor(
                 table_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 num_rows="fixed",
                 column_config={
@@ -2638,7 +2638,7 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         color=alt.Color("감성코드:N", scale=alt.Scale(domain=["positive", "negative", "neutral", "excluded"], range=["#4D79F6", "#FFAA3B", "#94A3B8", "#D1D5DB"]), legend=None),
         tooltip=[alt.Tooltip("감성:N", title="감성"), alt.Tooltip("댓글 수:Q", title="댓글 수"), alt.Tooltip("비율:Q", title="비율", format=".1%")],
     ).properties(height=220)
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     with st.container(border=True):
         render_representative_comments(
@@ -2668,11 +2668,28 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         display[COL_SENTIMENT] = display.get(COL_SENTIMENT, display.get("sentiment_label", pd.Series("", index=display.index))).fillna("")
         cols = [COL_SENTIMENT, "제품 타깃", "인사이트 유형", "분류 유형", "신뢰도", COL_ORIGINAL, COL_TRANSLATION, COL_CONTEXT, "분류 이유", "맥락 필요", COL_LIKES]
         existing = [c for c in cols if c in display.columns]
-        st.dataframe(display[existing], use_container_width=True, hide_index=True)
+        st.dataframe(display[existing], width="stretch", hide_index=True)
 
 def get_mode() -> str:
     """Dashboard mode selector. Full mode only."""
     return "full"
+
+
+def is_streamlit_cloud_runtime() -> bool:
+    sharing_mode = os.getenv("STREAMLIT_SHARING_MODE", "").strip().lower() == "true"
+    mount_src = str(BASE_DIR).replace("\\", "/").startswith("/mount/src/")
+    return sharing_mode or mount_src
+
+
+def should_autoload_full_data() -> bool:
+    """Cloud health-check 안정성을 위해 기본은 수동 로딩."""
+    if not is_streamlit_cloud_runtime():
+        return True
+    try:
+        autoload = str(st.query_params.get("autoload", "0")).strip().lower()
+    except Exception:
+        autoload = "0"
+    return autoload in {"1", "true", "yes", "on"}
 
 
 def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> dict[str, list[str]]:
@@ -2720,11 +2737,11 @@ def _render_filter_toggle(label: str, pill_key: str, all_options: list[str]) -> 
     """Render 전체 선택 / 전체 해제 toggle buttons for a pill filter."""
     col_all, col_clear = st.columns(2)
     with col_all:
-        if st.button("전체 선택", key=f"{pill_key}_all", use_container_width=True, type="secondary"):
+        if st.button("전체 선택", key=f"{pill_key}_all", width="stretch", type="secondary"):
             st.session_state[pill_key] = list(all_options)
             st.rerun()
     with col_clear:
-        if st.button("전체 해제", key=f"{pill_key}_clear", use_container_width=True, type="secondary"):
+        if st.button("전체 해제", key=f"{pill_key}_clear", width="stretch", type="secondary"):
             st.session_state[pill_key] = []
             st.rerun()
 
@@ -2738,7 +2755,7 @@ def _render_sidebar_filters(options: dict[str, list[str]]) -> dict[str, Any]:
 
     with st.sidebar:
         st.markdown("### 탐색 필터")
-        if st.button("필터 초기화 (전체 데이터 보기)", use_container_width=True, type="secondary"):
+        if st.button("필터 초기화 (전체 데이터 보기)", width="stretch", type="secondary"):
             st.session_state["filter_products"] = list(options["products"])
             st.session_state["filter_regions"] = list(options["regions"])
             st.session_state["filter_brands"] = list(options["brands"])
@@ -2898,7 +2915,7 @@ def render_comments_lite(comments_df: pd.DataFrame) -> None:
     st.caption(f"{start + 1:,}~{end:,} / {total:,} (page {page}/{total_pages})")
     st.dataframe(
         view_df.iloc[start:end][show_cols] if show_cols else view_df.iloc[start:end],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -2967,7 +2984,7 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
                 sentiment_kr = {"positive": "긍정", "negative": "부정", "neutral": "중립"}
                 if "주요 감성" in display_topics.columns:
                     display_topics["주요 감성"] = display_topics["주요 감성"].map(lambda x: sentiment_kr.get(x, x))
-                st.dataframe(display_topics, use_container_width=True, hide_index=True)
+                st.dataframe(display_topics, width="stretch", hide_index=True)
 
     with col_right:
         if not keyword_insights.empty:
@@ -2982,7 +2999,7 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
                 sentiment_kr = {"positive": "긍정", "negative": "부정", "neutral": "중립"}
                 if "주요 감성" in display_kw.columns:
                     display_kw["주요 감성"] = display_kw["주요 감성"].map(lambda x: sentiment_kr.get(x, x))
-                st.dataframe(display_kw, use_container_width=True, hide_index=True)
+                st.dataframe(display_kw, width="stretch", hide_index=True)
 
     # Product mentions + Negative summaries side by side
     col_prod, col_neg = st.columns(2)
@@ -2997,7 +3014,7 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
                     "product": "제품", "mention_count": "언급 수", "positive_count": "긍정",
                     "negative_count": "부정", "neutral_count": "중립", "negative_rate": "부정 비율",
                 })
-                st.dataframe(display_prod, use_container_width=True, hide_index=True)
+                st.dataframe(display_prod, width="stretch", hide_index=True)
 
     with col_neg:
         if "nlp_summary" in filtered_comments.columns:
@@ -3024,6 +3041,15 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
+
+    if not st.session_state.get("_full_data_loaded", False) and not should_autoload_full_data():
+        st.markdown("## 가전 VoC Dashboard")
+        st.caption("클라우드 안정성을 위해 초기에는 데이터 로딩을 지연합니다.")
+        if st.button("대시보드 데이터 불러오기", type="primary", width="stretch"):
+            st.session_state["_full_data_loaded"] = True
+            st.rerun()
+        st.caption("자동 로딩이 필요하면 URL에 `?autoload=1`을 추가하세요.")
+        return
 
     with st.spinner("데이터 로딩 중…"):
         data = get_dashboard_data_resource()
@@ -3123,7 +3149,7 @@ def main() -> None:
             "CEJ": format_selection(selected_filters["cej"], empty_label="선택 없음"),
             "분석 유형": selected_filters.get("analysis_scope", "전체"),
             "키워드": selected_filters["keyword_query"] or "-",
-        }]), hide_index=True, use_container_width=True)
+        }]), hide_index=True, width="stretch")
         return
 
     validity_series = filtered_comments["comment_validity"] if "comment_validity" in filtered_comments.columns else pd.Series("valid", index=filtered_comments.index)
@@ -3217,7 +3243,7 @@ def main() -> None:
             data=build_raw_download_package(raw_comments_export, filtered_videos, weekly_window, cej_df, brand_df, density_df),
             file_name="voc_dashboard_raw_data.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -3321,7 +3347,7 @@ def main() -> None:
                         alt.Tooltip("비율:Q", title="응답률", format=".1%"),
                     ],
                 ).properties(height=340).configure_view(strokeWidth=0)
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width="stretch")
                 st.caption(f"시간순으로 정렬된 최근 {len(axis_order)}개 주차를 표시합니다. 전체 {total_pages}페이지 중 {min(page, total_pages)}페이지입니다.")
             else:
                 st.info("해당 조건에서 주간 차트를 그릴 데이터가 없습니다.")
@@ -3350,7 +3376,7 @@ def main() -> None:
                         y=alt.Y("인사이트 유형:N", sort="-x", title=""),
                         tooltip=["인사이트 유형", "건수"],
                     ).properties(height=max(120, len(insight_counts) * 32))
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, width="stretch")
 
         with st.container(border=True):
             st.markdown("### CEJ 단계별 고객 신뢰도")
@@ -3360,7 +3386,7 @@ def main() -> None:
                 st.caption("※ 고객 신뢰도 지수 = ((긍정 댓글 수 − 부정 댓글 수) ÷ (긍정 댓글 수 + 부정 댓글 수)) × 50 + 50")
                 st.dataframe(
                     cej_trust_df[[COL_CEJ, "product", COL_COUNTRY, COL_BRAND, "댓글 수", "긍정 댓글 수", "부정 댓글 수", "고객 신뢰도 지수"]],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -3374,7 +3400,7 @@ def main() -> None:
                 st.caption("※ 고객 신뢰도 지수 = ((긍정 댓글 수 − 부정 댓글 수) ÷ (긍정 댓글 수 + 부정 댓글 수)) × 50 + 50")
                 st.dataframe(
                     brand_trust_df[[COL_BRAND, "product", COL_COUNTRY, "언급 댓글 수", "긍정 댓글 수", "부정 댓글 수", "언급 비율", "고객 신뢰도 지수"]],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -3395,7 +3421,7 @@ def main() -> None:
                     "classification_type": "분류 유형",
                 })
                 keep_cols = [col for col in ["제품", "국가", "고객경험여정", "감성", "의견 문장", "분류 유형"] if col in display_inquiry.columns]
-                st.dataframe(display_inquiry[keep_cols].head(20), use_container_width=True, hide_index=True)
+                st.dataframe(display_inquiry[keep_cols].head(20), width="stretch", hide_index=True)
                 st.caption("문의 여부는 감성 라벨과 별도로 유지합니다. 반복 문의는 불만과 별개의 운영 개선 과제로 추적하세요.")
 
         with st.container(border=True):
@@ -3411,3 +3437,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
