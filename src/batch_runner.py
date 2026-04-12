@@ -9,42 +9,54 @@ from src.cli import run_pipeline
 BATCH_PRESETS = {
     "세탁기": {
         "KR": [
-            {"keyword": "세탁기 추천", "language": "ko", "region": "KR", "max_videos": 10},
-            {"keyword": "세탁기 고장", "language": "ko", "region": "KR", "max_videos": 10},
+            {"keyword": "세탁기 추천", "language": "ko", "region": "KR", "max_videos": 25},
+            {"keyword": "세탁기 고장", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "세탁기 비교 리뷰", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "세탁기 후기", "language": "ko", "region": "KR", "max_videos": 15},
         ],
         "US": [
-            {"keyword": "washer review", "language": "en", "region": "US", "max_videos": 10},
-            {"keyword": "washer problems", "language": "en", "region": "US", "max_videos": 10},
+            {"keyword": "washer review", "language": "en", "region": "US", "max_videos": 25},
+            {"keyword": "washer problems", "language": "en", "region": "US", "max_videos": 15},
+            {"keyword": "best washing machine", "language": "en", "region": "US", "max_videos": 15},
         ],
     },
     "냉장고": {
         "KR": [
-            {"keyword": "냉장고 추천", "language": "ko", "region": "KR", "max_videos": 10},
-            {"keyword": "냉장고 고장", "language": "ko", "region": "KR", "max_videos": 10},
+            {"keyword": "냉장고 추천", "language": "ko", "region": "KR", "max_videos": 25},
+            {"keyword": "냉장고 고장", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "냉장고 비교 리뷰", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "냉장고 후기", "language": "ko", "region": "KR", "max_videos": 15},
         ],
         "US": [
-            {"keyword": "refrigerator review", "language": "en", "region": "US", "max_videos": 10},
-            {"keyword": "refrigerator problems", "language": "en", "region": "US", "max_videos": 10},
+            {"keyword": "refrigerator review", "language": "en", "region": "US", "max_videos": 25},
+            {"keyword": "refrigerator problems", "language": "en", "region": "US", "max_videos": 15},
+            {"keyword": "best refrigerator", "language": "en", "region": "US", "max_videos": 15},
         ],
     },
     "건조기": {
         "KR": [
-            {"keyword": "건조기 추천", "language": "ko", "region": "KR", "max_videos": 10},
-            {"keyword": "건조기 고장", "language": "ko", "region": "KR", "max_videos": 10},
+            {"keyword": "건조기 추천", "language": "ko", "region": "KR", "max_videos": 25},
+            {"keyword": "건조기 고장", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "건조기 비교 리뷰", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "건조기 후기", "language": "ko", "region": "KR", "max_videos": 15},
         ],
         "US": [
-            {"keyword": "dryer review", "language": "en", "region": "US", "max_videos": 10},
-            {"keyword": "dryer problems", "language": "en", "region": "US", "max_videos": 10},
+            {"keyword": "dryer review", "language": "en", "region": "US", "max_videos": 25},
+            {"keyword": "dryer problems", "language": "en", "region": "US", "max_videos": 15},
+            {"keyword": "best dryer", "language": "en", "region": "US", "max_videos": 15},
         ],
     },
     "식기세척기": {
         "KR": [
-            {"keyword": "식기세척기 추천", "language": "ko", "region": "KR", "max_videos": 10},
-            {"keyword": "식기세척기 고장", "language": "ko", "region": "KR", "max_videos": 10},
+            {"keyword": "식기세척기 추천", "language": "ko", "region": "KR", "max_videos": 25},
+            {"keyword": "식기세척기 고장", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "식기세척기 비교 리뷰", "language": "ko", "region": "KR", "max_videos": 15},
+            {"keyword": "식기세척기 후기", "language": "ko", "region": "KR", "max_videos": 15},
         ],
         "US": [
-            {"keyword": "dishwasher review", "language": "en", "region": "US", "max_videos": 10},
-            {"keyword": "dishwasher problems", "language": "en", "region": "US", "max_videos": 10},
+            {"keyword": "dishwasher review", "language": "en", "region": "US", "max_videos": 25},
+            {"keyword": "dishwasher problems", "language": "en", "region": "US", "max_videos": 15},
+            {"keyword": "best dishwasher", "language": "en", "region": "US", "max_videos": 15},
         ],
     },
 }

@@ -20,7 +20,7 @@ collection:
     search_oversample_factor: 3
     require_product_term: true
     require_target_brand: false
-    exclude_competitor_brands: true
+    exclude_competitor_brands: false
     target_brand_terms:
       - lg
       - 엘지

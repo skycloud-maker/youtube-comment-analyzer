@@ -32,7 +32,7 @@ class VideoSelectionSettings(BaseModel):
     search_oversample_factor: int = 3
     require_product_term: bool = True
     require_target_brand: bool = False
-    exclude_competitor_brands: bool = True
+    exclude_competitor_brands: bool = False
     target_brand_terms: list[str] = Field(
         default_factory=lambda: ["lg", "엘지", "오브제", "디오스", "트롬", "휘센", "lg전자"]
     )
