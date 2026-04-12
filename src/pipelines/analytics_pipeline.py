@@ -141,8 +141,8 @@ class AnalyticsPipeline:
             analysis_comments["nlp_sentiment_reason"] = analysis_results.map(lambda item: item.nlp_sentiment_reason)
             analysis_comments["nlp_topics"] = analysis_results.map(lambda item: item.nlp_topics)
             analysis_comments["nlp_topic_sentiments"] = analysis_results.map(lambda item: item.nlp_topic_sentiments)
-            analysis_comments["nlp_is_inquiry"] = analysis_results.map(lambda item: item.nlp_is_inquiry)
-            analysis_comments["nlp_is_rhetorical"] = analysis_results.map(lambda item: item.nlp_is_rhetorical)
+            analysis_comments["nlp_is_inquiry"] = analysis_results.map(lambda item: bool(item.nlp_is_inquiry))
+            analysis_comments["nlp_is_rhetorical"] = analysis_results.map(lambda item: bool(item.nlp_is_rhetorical))
             analysis_comments["nlp_summary"] = analysis_results.map(lambda item: item.nlp_summary)
             analysis_comments["nlp_keywords"] = analysis_results.map(lambda item: item.nlp_keywords)
             analysis_comments["nlp_product_mentions"] = analysis_results.map(lambda item: item.nlp_product_mentions)
@@ -374,14 +374,23 @@ class AnalyticsPipeline:
 
     @staticmethod
     def _representative_metadata(row: pd.Series) -> pd.Series:
-        text = str(row.get("text_display", "") or row.get("cleaned_text", "") or "")
-        product_related = bool(row.get("product_related", False))
-        sentiment = str(row.get("sentiment_label", "") or "")
-        classification_type = str(row.get("classification_type", "informational") or "informational")
-        confidence = str(row.get("confidence_level", "low") or "low")
-        context_required = bool(row.get("context_required_for_display", False))
-        needs_review = bool(row.get("needs_review", False))
-        target = str(row.get("product_target", "") or "")
+        text_display = row.get("text_display", "")
+        cleaned_text = row.get("cleaned_text", "")
+        text = str(text_display) if pd.notna(text_display) and str(text_display).strip() else (str(cleaned_text) if pd.notna(cleaned_text) else "")
+        product_related_raw = row.get("product_related", False)
+        product_related = bool(product_related_raw) if pd.notna(product_related_raw) else False
+        sentiment_raw = row.get("sentiment_label", "")
+        sentiment = str(sentiment_raw) if pd.notna(sentiment_raw) else ""
+        classification_raw = row.get("classification_type", "informational")
+        classification_type = str(classification_raw) if pd.notna(classification_raw) and str(classification_raw).strip() else "informational"
+        confidence_raw = row.get("confidence_level", "low")
+        confidence = str(confidence_raw) if pd.notna(confidence_raw) and str(confidence_raw).strip() else "low"
+        context_required_raw = row.get("context_required_for_display", False)
+        context_required = bool(context_required_raw) if pd.notna(context_required_raw) else False
+        needs_review_raw = row.get("needs_review", False)
+        needs_review = bool(needs_review_raw) if pd.notna(needs_review_raw) else False
+        target_raw = row.get("product_target", "")
+        target = str(target_raw) if pd.notna(target_raw) else ""
 
         text_len = len(text.strip())
         clarity = 5 if 25 <= text_len <= 220 else 4 if 12 <= text_len <= 280 else 2
@@ -455,9 +464,9 @@ class AnalyticsPipeline:
                 subset["representative_score"] = 0
             subset["_dedup_key"] = subset.apply(
                 lambda row: "|".join([
-                    str(row.get("cluster_id", "") or ""),
-                    str(row.get("product", "") or ""),
-                    str(row.get("topic_label", row.get("classification_type", "general")) or "general"),
+                    str(row.get("cluster_id", "")) if pd.notna(row.get("cluster_id", "")) else "",
+                    str(row.get("product", "")) if pd.notna(row.get("product", "")) else "",
+                    (str(row.get("topic_label")) if pd.notna(row.get("topic_label")) else "") or (str(row.get("classification_type")) if pd.notna(row.get("classification_type")) else "general") or "general",
                     _canonical_representative_text(row.get("cleaned_text", row.get("text_display", ""))),
                 ]),
                 axis=1,

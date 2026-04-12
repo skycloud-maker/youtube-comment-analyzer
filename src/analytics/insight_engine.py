@@ -99,7 +99,8 @@ def build_inquiry_summary(analysis_df: pd.DataFrame) -> pd.DataFrame:
     if analysis_df.empty or "nlp_is_inquiry" not in analysis_df.columns:
         return pd.DataFrame(columns=["comment_id", "text", "nlp_summary", "nlp_topics", "is_rhetorical", "product_mentions"])
 
-    inquiries = analysis_df[analysis_df["nlp_is_inquiry"] == True].copy()
+    inquiry_mask = analysis_df["nlp_is_inquiry"].map(_is_truthy)
+    inquiries = analysis_df[inquiry_mask].copy()
     if inquiries.empty:
         return pd.DataFrame(columns=["comment_id", "text", "nlp_summary", "nlp_topics", "is_rhetorical", "product_mentions"])
 
@@ -108,7 +109,7 @@ def build_inquiry_summary(analysis_df: pd.DataFrame) -> pd.DataFrame:
     result["text"] = inquiries.get(text_col, "").fillna("")
     result["nlp_summary"] = inquiries.get("nlp_summary", "").fillna("")
     result["nlp_topics"] = inquiries["nlp_topics"].apply(_serialize_list)
-    result["is_rhetorical"] = inquiries.get("nlp_is_rhetorical", False).fillna(False)
+    result["is_rhetorical"] = inquiries.get("nlp_is_rhetorical", False).map(_is_truthy)
     result["product_mentions"] = inquiries.get("nlp_product_mentions", "").apply(_serialize_list)
     return result.reset_index(drop=True)
 
@@ -188,6 +189,20 @@ def _parse_list(value: Any) -> list[str]:
         except (json.JSONDecodeError, TypeError):
             return []
     return []
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return False
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "t"}
+    return False
 
 
 def _parse_dict(value: Any) -> dict[str, str]:

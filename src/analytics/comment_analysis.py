@@ -8,6 +8,7 @@ Supports two analysis modes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import logging
 import re
 from typing import Any
@@ -58,6 +59,30 @@ CHANNEL_FEEDBACK_MARKERS = [
 GENERIC_POSITIVE_ONLY_MARKERS = [
     "good", "great", "nice", "awesome", "amazing", "best", "love it", "thanks", "thank you",
     "\uC88B\uC544\uC694", "\uC88B\uB124\uC694", "\uC88B\uB124", "\uCD5C\uACE0", "\uAC10\uC0AC", "\uAC10\uC0AC\uD569\uB2C8\uB2E4", "\uAD7F", "\uB300\uBC15",
+]
+INQUIRY_MARKERS = [
+    "문의",
+    "어떻게",
+    "어디",
+    "왜",
+    "무엇",
+    "뭐",
+    "인가요",
+    "맞나요",
+    "가능할까요",
+    "가능한가요",
+    "되나요",
+    "알려",
+    "질문",
+    "how",
+    "where",
+    "why",
+    "what",
+    "can i",
+    "could i",
+    "does it",
+    "is it",
+    "anyone know",
 ]
 PRODUCT_MARKERS = [
     "washer", "washing machine", "dryer", "refrigerator", "fridge", "dishwasher",
@@ -135,6 +160,38 @@ def _is_generic_positive_only(text: str) -> bool:
     compact = re.sub(r"[^\w\s\uac00-\ud7a3]", " ", lowered)
     compact = " ".join(compact.split())
     return compact in GENERIC_POSITIVE_ONLY_MARKERS
+
+
+def _coerce_bool(value: Any, default: bool | None = False) -> bool | None:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):
+            return default
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y", "t"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "f", ""}:
+            return False
+        return default
+    return default
+
+
+def _infer_inquiry_flag(text: str, parent_comment: str = "") -> bool:
+    source = text or ""
+    lowered = _normalize_text(source)
+    parent = _normalize_text(parent_comment or "")
+    if "?" in source or "？" in source:
+        return True
+    if any(marker in lowered for marker in INQUIRY_MARKERS):
+        return True
+    if parent and any(marker in parent for marker in INQUIRY_MARKERS):
+        return True
+    return False
 
 
 def _detect_target(text: str, parent_comment: str, context_comments: list[str] | None) -> str | None:
@@ -358,7 +415,9 @@ def analyze_comment_with_context(
                     target = _detect_target_from_nlp(nlp_products)
 
     # Compute insight_type from video context + analysis result
-    is_inquiry = nlp_fields.get("nlp_is_inquiry", False)
+    inquiry_from_nlp = _coerce_bool(nlp_fields.get("nlp_is_inquiry"), default=None)
+    is_inquiry = inquiry_from_nlp if inquiry_from_nlp is not None else _infer_inquiry_flag(source_text, parent_text)
+    is_rhetorical = _coerce_bool(nlp_fields.get("nlp_is_rhetorical"), default=False)
     nlp_topics_list = nlp_fields.get("nlp_topics", [])
     insight_type = _infer_insight_type(video_type, classification_type, sentiment, is_inquiry, nlp_topics_list, source_text)
     lg_relevance_score, lg_relevant_comment = _compute_lg_comment_relevance(
@@ -389,8 +448,8 @@ def analyze_comment_with_context(
         nlp_sentiment_reason=nlp_fields.get("nlp_sentiment_reason"),
         nlp_topics=nlp_fields.get("nlp_topics", []),
         nlp_topic_sentiments=nlp_fields.get("nlp_topic_sentiments", {}),
-        nlp_is_inquiry=nlp_fields.get("nlp_is_inquiry", False),
-        nlp_is_rhetorical=nlp_fields.get("nlp_is_rhetorical", False),
+        nlp_is_inquiry=bool(is_inquiry),
+        nlp_is_rhetorical=bool(is_rhetorical),
         nlp_summary=nlp_fields.get("nlp_summary"),
         nlp_keywords=nlp_fields.get("nlp_keywords", []),
         nlp_product_mentions=nlp_fields.get("nlp_product_mentions", []),
