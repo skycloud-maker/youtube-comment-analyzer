@@ -2671,31 +2671,8 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         st.dataframe(display[existing], use_container_width=True, hide_index=True)
 
 def get_mode() -> str:
-    """URL 파라미터로 모드 선택: ?mode=lite / ?mode=full"""
-    default_mode = "lite" if is_streamlit_cloud_runtime() else "full"
-    try:
-        mode = st.query_params.get("mode", default_mode)  # Streamlit query params
-    except Exception:
-        mode = default_mode
-    normalized = str(mode).lower()
-    return normalized if normalized in {"lite", "full"} else default_mode
-
-
-def is_streamlit_cloud_runtime() -> bool:
-    sharing_mode = os.getenv("STREAMLIT_SHARING_MODE", "").strip().lower() == "true"
-    mount_src = str(BASE_DIR).replace("\\", "/").startswith("/mount/src/")
-    return sharing_mode or mount_src
-
-
-def should_autoload_lite_data() -> bool:
-    """On Streamlit Cloud, avoid heavy auto-load during script health checks."""
-    if not is_streamlit_cloud_runtime():
-        return True
-    try:
-        autoload = str(st.query_params.get("autoload", "0")).strip().lower()
-    except Exception:
-        autoload = "0"
-    return autoload in {"1", "true", "yes", "on"}
+    """Dashboard mode selector. Full mode only."""
+    return "full"
 
 
 def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> dict[str, list[str]]:
@@ -3048,38 +3025,12 @@ def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
 
-    mode = get_mode()
-    if mode == "lite":
-        should_load = st.session_state.get("_lite_data_loaded", False) or should_autoload_lite_data()
-        if not should_load:
-            st.markdown("## 가전 VoC Dashboard (Lite)")
-            st.caption("클라우드 초기 실행 안정성을 위해 Lite 데이터는 수동 로딩합니다.")
-            if st.button("Lite 데이터 불러오기", type="primary", use_container_width=True):
-                st.session_state["_lite_data_loaded"] = True
-                st.rerun()
-            st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
-            st.markdown("- 전체 모드: `?mode=full`")
-            st.markdown("- Lite 모드: `?mode=lite`")
-            st.markdown("- Lite 자동로딩: `?mode=lite&autoload=1`")
-            return
-        with st.spinner("데이터 로딩 중…"):
-            data = get_dashboard_data_resource_lite_comments()
-    else:
-        with st.spinner("데이터 로딩 중…"):
-            data = get_dashboard_data_resource()
+    with st.spinner("데이터 로딩 중…"):
+        data = get_dashboard_data_resource()
 
     comments_df = add_localized_columns(data.get("comments", pd.DataFrame()))
     if comments_df.empty:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
-        return
-
-    if mode == "lite":
-        st.markdown("## 가전 VoC Dashboard (Lite)")
-        st.caption("댓글은 포함하되, 샘플/페이지네이션 방식으로 빠르게 표시합니다.")
-        render_comments_lite(comments_df)
-        st.info("전체 분석(차트/키워드/대표코멘트/영상분석)은 mode=full 로 접속하세요.")
-        st.markdown("- 전체 모드: `?mode=full`")
-        st.markdown("- Lite 모드: `?mode=lite`")
         return
 
     videos_df = data.get("videos", pd.DataFrame()).copy()
