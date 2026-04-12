@@ -68,6 +68,7 @@ def build_args(*, product: str, keyword: str, language: str, region: str, max_vi
     return SimpleNamespace(
         command="run",
         keyword=keyword,
+        keywords=[],
         product=product,
         max_videos=max_videos,
         comments_per_video=0,
@@ -89,16 +90,27 @@ def build_args(*, product: str, keyword: str, language: str, region: str, max_vi
 
 def main() -> None:
     results = []
+    failures = []
     for product, countries in BATCH_PRESETS.items():
         for country_code, presets in countries.items():
             for index, preset in enumerate(presets, start=1):
                 args = build_args(product=product, suffix=str(index), **preset)
-                result = run_pipeline(args)
-                result["product"] = product
-                result["country"] = country_code
-                results.append(result)
-                print(f"[완료] {product} / {country_code} / {preset['keyword']} / run_id={result['run_id']}")
-    print(results)
+                try:
+                    result = run_pipeline(args)
+                    result["product"] = product
+                    result["country"] = country_code
+                    result["keyword"] = preset["keyword"]
+                    results.append(result)
+                    print(f"[완료] {product} / {country_code} / {preset['keyword']} / run_id={result['run_id']}")
+                except Exception as exc:
+                    failures.append({
+                        "product": product,
+                        "country": country_code,
+                        "keyword": preset["keyword"],
+                        "error": str(exc),
+                    })
+                    print(f"[실패] {product} / {country_code} / {preset['keyword']} / error={exc}")
+    print({"results": results, "failures": failures})
 
 
 if __name__ == "__main__":

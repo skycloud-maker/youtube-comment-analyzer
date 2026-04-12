@@ -33,7 +33,11 @@ class ReportWriter:
             f"- 오류 영상 수: {len(errors_df)}개",
         ]
         if not quality_summary.empty:
-            removed = quality_summary[quality_summary["comment_quality"] != "meaningful"]["count"].sum()
+            removed = 0
+            if {"comment_quality", "count"}.issubset(quality_summary.columns):
+                removed = quality_summary[quality_summary["comment_quality"] != "meaningful"]["count"].sum()
+            elif {"comment_validity", "count"}.issubset(quality_summary.columns):
+                removed = quality_summary[quality_summary["comment_validity"] == "excluded"]["count"].sum()
             lines.append(f"- 제거 댓글 수: {int(removed)}개")
 
         lines.extend(["", "## 감성 및 주간 변화", ""])
