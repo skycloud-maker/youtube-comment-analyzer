@@ -27,11 +27,22 @@ class StorageSettings(BaseModel):
     logs_dir: Path = Path("data/logs")
 
 
+class NlpAnalyzerSettings(BaseModel):
+    enabled: bool = True
+    provider: str = "claude"
+    model: str = "claude-sonnet-4-20250514"
+    fallback_provider: str = "openai"
+    fallback_model: str = "gpt-4o-mini"
+    batch_size: int = 50
+    use_fallback_on_failure: bool = True
+
+
 class AnalyticsSettings(BaseModel):
     top_n_keywords: int = 30
     max_representative_comments: int = 5
     topic_count: int = 6
     risk_keywords: list[str] = Field(default_factory=lambda: ["배송", "불량", "가격", "AS", "소음", "발열", "품질"])
+    nlp_analyzer: NlpAnalyzerSettings = Field(default_factory=NlpAnalyzerSettings)
 
 
 class ExcelSettings(BaseModel):

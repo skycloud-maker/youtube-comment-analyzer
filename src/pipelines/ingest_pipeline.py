@@ -29,7 +29,20 @@ class IngestPipeline:
         errors_path = run_dir / "errors.csv"
         manifest_path = run_dir / "run_manifest.json"
 
-        videos = self.video_search.search(manifest.run_id, config)
+        search_keywords = config.keywords if config.keywords else [config.keyword]
+        all_videos: list[dict] = []
+        seen_video_ids: set[str] = set()
+        per_keyword_limit = max(1, config.max_videos // len(search_keywords))
+        for kw in search_keywords:
+            kw_config = config.model_copy(update={"keyword": kw, "max_videos": per_keyword_limit})
+            kw_results = self.video_search.search(manifest.run_id, kw_config)
+            for v in kw_results:
+                vid = v["video_id"]
+                if vid not in seen_video_ids:
+                    seen_video_ids.add(vid)
+                    all_videos.append(v)
+            self.logger.info("Keyword '%s': %d videos (total unique: %d)", kw, len(kw_results), len(all_videos))
+        videos = all_videos[:config.max_videos]
         videos_df = pd.DataFrame(videos)
         comment_rows: list[dict] = []
         error_rows: list[dict] = []

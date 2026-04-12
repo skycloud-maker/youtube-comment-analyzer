@@ -16,6 +16,7 @@ def utc_now_iso() -> str:
 
 class RunConfig(BaseModel):
     keyword: str
+    keywords: list[str] = Field(default_factory=list)
     product: str | None = None
     max_videos: int = 100
     comments_per_video: int = 1000

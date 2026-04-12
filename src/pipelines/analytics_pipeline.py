@@ -11,6 +11,13 @@ import pandas as pd
 
 from src.analytics.brands import infer_brand
 from src.analytics.comment_analysis import analyze_comment_with_context
+from src.analytics.insight_engine import (
+    build_inquiry_summary,
+    build_keyword_insight_summary,
+    build_nlp_sentiment_summary,
+    build_product_mention_summary,
+    build_topic_insight_summary,
+)
 from src.analytics.opinion_units import (
     build_opinion_units,
     build_representative_bundles,
@@ -20,7 +27,7 @@ from src.analytics.opinion_units import (
 from src.analytics.clustering import assign_clusters
 from src.analytics.descriptive import build_descriptive_metrics
 from src.analytics.keywords import extract_keywords
-from src.analytics.sentiment import score_sentiment
+from src.analytics.sentiment import NLP_ANALYZER_AVAILABLE, _build_nlp_router, score_sentiment
 from src.analytics.topics import infer_topic
 from src.analytics.trends import build_issue_keyword_status, build_weekly_keyword_trend, build_weekly_sentiment_trend
 from src.utils.io import ensure_dir, write_dataframe
@@ -42,12 +49,31 @@ def _looks_like_inquiry(text: str) -> bool:
 class AnalyticsPipeline:
     """Compute business-oriented analysis outputs."""
 
-    def __init__(self, processed_dir: Path, risk_keywords: list[str], top_n_keywords: int, topic_count: int, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        processed_dir: Path,
+        risk_keywords: list[str],
+        top_n_keywords: int,
+        topic_count: int,
+        logger: logging.Logger | None = None,
+        nlp_analyzer_config: dict | None = None,
+    ) -> None:
         self.processed_dir = ensure_dir(processed_dir)
         self.risk_keywords = risk_keywords
         self.top_n_keywords = top_n_keywords
         self.topic_count = topic_count
         self.logger = logger or logging.getLogger(__name__)
+        self.nlp_config = nlp_analyzer_config or {}
+        self.use_nlp = self.nlp_config.get("enabled", True) and NLP_ANALYZER_AVAILABLE
+        self.nlp_provider = None
+        if self.use_nlp:
+            self.nlp_provider = _build_nlp_router(
+                provider=self.nlp_config.get("provider", "claude"),
+                model=self.nlp_config.get("model", "claude-sonnet-4-20250514"),
+                fallback_provider=self.nlp_config.get("fallback_provider", "openai"),
+                fallback_model=self.nlp_config.get("fallback_model", "gpt-4o-mini"),
+            )
+            self.logger.info("nlp_analyzer enabled (provider=%s)", self.nlp_config.get("provider", "claude"))
 
     def run(self, run_id: str, videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         working_comments = self._attach_video_context(comments_df, videos_df)
@@ -58,6 +84,8 @@ class AnalyticsPipeline:
         if not analysis_comments.empty:
             parent_lookup = analysis_comments.set_index("comment_id")["text_display"].to_dict() if "comment_id" in analysis_comments.columns and "text_display" in analysis_comments.columns else {}
             analysis_comments["parent_comment_text"] = analysis_comments.get("parent_comment_id", pd.Series(index=analysis_comments.index, dtype=object)).map(lambda value: parent_lookup.get(value, "") if pd.notna(value) else "")
+            _nlp_provider = self.nlp_provider
+            _use_nlp = self.use_nlp
             analysis_results = analysis_comments.apply(
                 lambda row: analyze_comment_with_context(
                     row.get("cleaned_text", ""),
@@ -66,9 +94,18 @@ class AnalyticsPipeline:
                     parent_comment=row.get("parent_comment_text", ""),
                     context_comments=["" if pd.isna(row.get("title", pd.NA)) else str(row.get("title", "")), "" if pd.isna(row.get("product", pd.NA)) else str(row.get("product", ""))],
                     is_reply=bool(row.get("is_reply", False)),
+                    comment_id=str(row.get("comment_id", "")),
+                    nlp_provider=_nlp_provider,
+                    use_nlp=_use_nlp,
+                    video_context={
+                        "title": "" if pd.isna(row.get("title", pd.NA)) else str(row.get("title", "")),
+                        "product": "" if pd.isna(row.get("product", pd.NA)) else str(row.get("product", "")),
+                        "channel": "" if pd.isna(row.get("channel_title", pd.NA)) else str(row.get("channel_title", "")),
+                    },
                 ),
                 axis=1,
             )
+            # Core analysis fields
             analysis_comments["product_related"] = analysis_results.map(lambda item: item.product_related)
             analysis_comments["product_target"] = analysis_results.map(lambda item: item.product_target)
             analysis_comments["sentiment_label"] = analysis_results.map(lambda item: item.sentiment_label)
@@ -80,6 +117,21 @@ class AnalyticsPipeline:
             analysis_comments["context_required_for_display"] = analysis_results.map(lambda item: item.context_required_for_display)
             analysis_comments["classification_reason"] = analysis_results.map(lambda item: item.reason)
             analysis_comments["needs_review"] = analysis_results.map(lambda item: item.needs_review)
+            analysis_comments["insight_type"] = analysis_results.map(lambda item: item.insight_type)
+            # nlp_analyzer enrichment fields
+            analysis_comments["nlp_label"] = analysis_results.map(lambda item: item.nlp_label)
+            analysis_comments["nlp_confidence"] = analysis_results.map(lambda item: item.nlp_confidence)
+            analysis_comments["nlp_sentiment_reason"] = analysis_results.map(lambda item: item.nlp_sentiment_reason)
+            analysis_comments["nlp_topics"] = analysis_results.map(lambda item: item.nlp_topics)
+            analysis_comments["nlp_topic_sentiments"] = analysis_results.map(lambda item: item.nlp_topic_sentiments)
+            analysis_comments["nlp_is_inquiry"] = analysis_results.map(lambda item: item.nlp_is_inquiry)
+            analysis_comments["nlp_is_rhetorical"] = analysis_results.map(lambda item: item.nlp_is_rhetorical)
+            analysis_comments["nlp_summary"] = analysis_results.map(lambda item: item.nlp_summary)
+            analysis_comments["nlp_keywords"] = analysis_results.map(lambda item: item.nlp_keywords)
+            analysis_comments["nlp_product_mentions"] = analysis_results.map(lambda item: item.nlp_product_mentions)
+            analysis_comments["nlp_language"] = analysis_results.map(lambda item: item.nlp_language)
+            analysis_comments["nlp_provider"] = analysis_results.map(lambda item: item.nlp_provider)
+            analysis_comments["nlp_model"] = analysis_results.map(lambda item: item.nlp_model)
             representative_meta = analysis_comments.apply(self._representative_metadata, axis=1, result_type="expand")
             analysis_comments = pd.concat([analysis_comments, representative_meta], axis=1)
             analysis_comments["topic_label"] = analysis_comments["cleaned_text"].map(infer_topic)
@@ -88,13 +140,39 @@ class AnalyticsPipeline:
             analysis_comments = assign_clusters(analysis_comments, self.topic_count)
             analysis_comments["spam_like"] = analysis_comments.duplicated(subset=["video_id", "cleaned_text"], keep=False)
             analysis_comments["risk_flags"] = analysis_comments["cleaned_text"].map(self._flag_risks)
+            _merge_cols = [
+                "comment_id", "product_related", "product_target", "sentiment_label", "sentiment_score",
+                "signal_strength", "classification_type", "confidence_level", "topic_label", "brand_label",
+                "cluster_id", "spam_like", "risk_flags", "context_used", "context_required_for_display",
+                "classification_reason", "needs_review", "insight_type", "parent_comment_text",
+                "representative_score", "clarity_score", "product_specificity_score",
+                "insight_value_score", "representativeness_score", "explainability_score",
+                "context_independence_score", "representative_decision", "representative_reason",
+                "nlp_label", "nlp_confidence", "nlp_sentiment_reason", "nlp_topics",
+                "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical", "nlp_summary",
+                "nlp_keywords", "nlp_product_mentions", "nlp_language", "nlp_provider", "nlp_model",
+            ]
+            _available_merge_cols = [c for c in _merge_cols if c in analysis_comments.columns]
             working_comments = working_comments.merge(
-                analysis_comments[["comment_id", "product_related", "product_target", "sentiment_label", "sentiment_score", "signal_strength", "classification_type", "confidence_level", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags", "context_used", "context_required_for_display", "classification_reason", "needs_review", "parent_comment_text", "representative_score", "clarity_score", "product_specificity_score", "insight_value_score", "representativeness_score", "explainability_score", "context_independence_score", "representative_decision", "representative_reason"]],
+                analysis_comments[_available_merge_cols],
                 on="comment_id",
                 how="left",
             )
         else:
-            for column in ["product_related", "product_target", "sentiment_label", "sentiment_score", "signal_strength", "classification_type", "confidence_level", "topic_label", "brand_label", "cluster_id", "spam_like", "risk_flags", "context_used", "context_required_for_display", "classification_reason", "needs_review", "parent_comment_text", "representative_score", "clarity_score", "product_specificity_score", "insight_value_score", "representativeness_score", "explainability_score", "context_independence_score", "representative_decision", "representative_reason"]:
+            _empty_cols = [
+                "product_related", "product_target", "sentiment_label", "sentiment_score",
+                "signal_strength", "classification_type", "confidence_level", "topic_label",
+                "brand_label", "cluster_id", "spam_like", "risk_flags", "context_used",
+                "context_required_for_display", "classification_reason", "needs_review", "insight_type",
+                "parent_comment_text", "representative_score", "clarity_score",
+                "product_specificity_score", "insight_value_score", "representativeness_score",
+                "explainability_score", "context_independence_score", "representative_decision",
+                "representative_reason", "nlp_label", "nlp_confidence", "nlp_sentiment_reason",
+                "nlp_topics", "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical",
+                "nlp_summary", "nlp_keywords", "nlp_product_mentions", "nlp_language",
+                "nlp_provider", "nlp_model",
+            ]
+            for column in _empty_cols:
                 working_comments[column] = pd.NA
 
         working_comments["sentiment_label"] = working_comments["sentiment_label"].where(working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"), pd.NA)
@@ -134,6 +212,13 @@ class AnalyticsPipeline:
         cej_negative_rate = self._cej_negative_rate(analysis_comments)
         negative_density = self._negative_density(videos_df, analysis_comments)
 
+        # insight_engine aggregation from nlp_analyzer results
+        nlp_topic_insights = build_topic_insight_summary(analysis_comments)
+        nlp_keyword_insights = build_keyword_insight_summary(analysis_comments)
+        nlp_inquiry_summary = build_inquiry_summary(analysis_comments)
+        nlp_product_mentions = build_product_mention_summary(analysis_comments)
+        nlp_sentiment_dist = build_nlp_sentiment_summary(analysis_comments)
+
         outputs = {
             **metrics,
             "comments": working_comments,
@@ -154,6 +239,11 @@ class AnalyticsPipeline:
             "negative_density": negative_density,
             "new_issue_keywords": new_issue_keywords,
             "persistent_issue_keywords": persistent_issue_keywords,
+            "nlp_topic_insights": nlp_topic_insights,
+            "nlp_keyword_insights": nlp_keyword_insights,
+            "nlp_inquiry_summary": nlp_inquiry_summary,
+            "nlp_product_mentions": nlp_product_mentions,
+            "nlp_sentiment_distribution": nlp_sentiment_dist,
         }
 
         run_dir = ensure_dir(self.processed_dir / run_id)
@@ -306,7 +396,6 @@ class AnalyticsPipeline:
         return grouped.sort_values(["product", "region", "negative_rate", "comments"], ascending=[True, True, False, False]).reset_index(drop=True)
 
     @staticmethod
-    @staticmethod
     def _monitoring_summary(opinion_units_df: pd.DataFrame) -> pd.DataFrame:
         columns = ["source_count", "opinion_count", "positive_count", "negative_count", "neutral_count", "exclude_count", "neutral_rate", "exclude_rate", "split_rate"]
         if opinion_units_df.empty:
@@ -347,6 +436,7 @@ class AnalyticsPipeline:
             "negative_share": (negative_count / total) if total else 0.0,
         }])
 
+    @staticmethod
     def _negative_density(videos_df: pd.DataFrame, comments_df: pd.DataFrame) -> pd.DataFrame:
         columns = ["product", "region", "video_id", "title", "video_url", "negative_comments", "total_comments", "negative_density"]
         if videos_df.empty:

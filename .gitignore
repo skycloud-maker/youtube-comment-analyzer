@@ -49,3 +49,18 @@ Thumbs.db
 .idea/
 
 
+
+# Temporary files
+tmp_*.py
+test_artifacts/
+PPTAgent/
+data/dashboard_cache/dashboard_bundle_slim_test*.pkl
+
+# Claude worktrees (managed by Claude Code)
+.claude/worktrees/
+
+# Temp client dirs
+yt_client_*/
+_tmp/
+data/dashboard_cache/dashboard_bundle.pkl
+data/dashboard_cache/dashboard_bundle_meta.json

@@ -103,3 +103,83 @@ def test_compute_filtered_bundle_supports_inquiry_scope_and_empty_videos():
 
     assert bundle["inquiry_count"] == 1
     assert list(bundle["comments"]["comment_id"]) == ["c1"]
+
+
+def test_compute_filtered_bundle_distinguishes_all_selected_vs_clear_all():
+    comments = pd.DataFrame(
+        [
+            {
+                "comment_id": "c1",
+                "product": "dryer",
+                "region": "KR",
+                COL_COUNTRY: localize_region("KR"),
+                COL_BRAND: "미언급",
+                COL_CEJ: "기타",
+                COL_SENTIMENT: "부정",
+                "sentiment_label": "negative",
+                "text_display": "소음 이슈",
+                "cleaned_text": "소음 이슈",
+                "comment_validity": "valid",
+            },
+            {
+                "comment_id": "c2",
+                "product": "washer",
+                "region": "US",
+                COL_COUNTRY: localize_region("US"),
+                COL_BRAND: "LG",
+                COL_CEJ: "기타",
+                COL_SENTIMENT: "긍정",
+                "sentiment_label": "positive",
+                "text_display": "세척 성능",
+                "cleaned_text": "세척 성능",
+                "comment_validity": "valid",
+            },
+        ]
+    )
+
+    all_selected_bundle = compute_filtered_bundle(
+        comments,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {
+            "products": ["dryer", "washer"],
+            "regions": [localize_region("KR"), localize_region("US")],
+            "sentiments": [],
+            "cej": [],
+            "brands": [],
+            "products_active": False,  # 전체 선택 = 필터 미적용
+            "regions_active": False,
+            "sentiments_active": False,
+            "cej_active": False,
+            "brands_active": False,
+            "keyword_query": "",
+            "analysis_scope": "전체",
+        },
+        pd.DataFrame(),
+        pd.DataFrame(),
+    )
+
+    clear_all_bundle = compute_filtered_bundle(
+        comments,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {
+            "products": [],
+            "regions": [localize_region("KR"), localize_region("US")],
+            "sentiments": [],
+            "cej": [],
+            "brands": [],
+            "products_active": True,  # 전체 해제 = 실제 0선택
+            "regions_active": False,
+            "sentiments_active": False,
+            "cej_active": False,
+            "brands_active": False,
+            "keyword_query": "",
+            "analysis_scope": "전체",
+        },
+        pd.DataFrame(),
+        pd.DataFrame(),
+    )
+
+    assert len(all_selected_bundle["comments"]) == 2
+    assert clear_all_bundle["comments"].empty

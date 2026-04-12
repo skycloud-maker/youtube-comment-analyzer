@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ["run", "full-run", "search-videos", "collect-comments", "analyze", "export"]:
         sub = subparsers.add_parser(name)
         sub.add_argument("--keyword", required=name in {"run", "full-run", "search-videos"})
+        sub.add_argument("--keywords", nargs="*", default=[], help="Additional search keywords for broader coverage")
         sub.add_argument("--product")
         sub.add_argument("--max-videos", type=int, default=100)
         sub.add_argument("--comments-per-video", type=int, default=0)
@@ -75,8 +76,10 @@ def _build_dependencies() -> tuple[AppConfig, QuotaLedger, YoutubeClient]:
 
 
 def _build_run_config(args: argparse.Namespace) -> RunConfig:
+    all_keywords = [args.keyword or ""] + (args.keywords or [])
     return RunConfig(
         keyword=args.keyword or "",
+        keywords=[k for k in all_keywords if k],
         product=args.product,
         max_videos=args.max_videos,
         comments_per_video=args.comments_per_video,
@@ -164,6 +167,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, str]:
         config.yaml.analytics.top_n_keywords,
         config.yaml.analytics.topic_count,
         LOGGER,
+        nlp_analyzer_config=config.yaml.analytics.nlp_analyzer.model_dump(),
     )
     export = ExportPipeline(
         config.yaml.storage.exports_dir,

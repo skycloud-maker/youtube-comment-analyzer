@@ -1,11 +1,20 @@
-"""Context-aware product feedback analysis helpers."""
+"""Context-aware product feedback analysis helpers.
+
+Supports two analysis modes:
+- Legacy: rule-based with VADER sentiment (default fallback)
+- NLP Analyzer: LLM-based deep analysis via nlp_analyzer
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import logging
 import re
+from typing import Any
 
-from src.analytics.sentiment import score_sentiment
+from src.analytics.sentiment import score_sentiment, analyze_with_nlp, NLP_ANALYZER_AVAILABLE
+
+logger = logging.getLogger(__name__)
 
 AGREEMENT_MARKERS = [
     "i agree", "agree with", "exactly", "same", "true that", "right", "100%",
@@ -88,6 +97,21 @@ class CommentAnalysisResult:
     context_required_for_display: bool
     reason: str
     needs_review: bool
+    insight_type: str = "일반_의견"
+    # nlp_analyzer enrichment fields
+    nlp_label: str | None = None
+    nlp_confidence: float | None = None
+    nlp_sentiment_reason: str | None = None
+    nlp_topics: list[str] = field(default_factory=list)
+    nlp_topic_sentiments: dict[str, str] = field(default_factory=dict)
+    nlp_is_inquiry: bool = False
+    nlp_is_rhetorical: bool = False
+    nlp_summary: str | None = None
+    nlp_keywords: list[str] = field(default_factory=list)
+    nlp_product_mentions: list[str] = field(default_factory=list)
+    nlp_language: str | None = None
+    nlp_provider: str | None = None
+    nlp_model: str | None = None
 
 
 def _contains_any(text: str, markers: list[str]) -> bool:
@@ -248,10 +272,18 @@ def analyze_comment_with_context(
     parent_comment: str | None = None,
     context_comments: list[str] | None = None,
     is_reply: bool = False,
+    comment_id: str | None = None,
+    nlp_provider: Any | None = None,
+    use_nlp: bool = True,
+    video_context: dict[str, str] | None = None,
 ) -> CommentAnalysisResult:
     if validity != "valid":
         reason = f"\uc81c\uc678 \ub313\uae00\ub85c \ud310\ub2e8\ud588\uc2b5\ub2c8\ub2e4. \uc0ac\uc720: {exclusion_reason or 'low quality'}"
         return CommentAnalysisResult(False, None, None, None, "weak", "informational", "low", False, False, reason, False)
+
+    # Resolve video context
+    vc = video_context or {}
+    video_type = vc.get("type") or classify_video_type(vc.get("title", ""), vc.get("channel", ""))
 
     source_text = (text or "").strip()
     parent_text = (parent_comment or "").strip()
@@ -270,6 +302,39 @@ def analyze_comment_with_context(
         confidence = "low" if needs_review or context_required else "medium"
 
     reason = _build_reason(sentiment, classification_type, signal_strength, context_used, target)
+
+    # nlp_analyzer enrichment
+    nlp_fields: dict[str, Any] = {}
+    if use_nlp and NLP_ANALYZER_AVAILABLE and source_text:
+        cid = comment_id or "unknown"
+        nlp_result = analyze_with_nlp(cid, source_text, provider=nlp_provider)
+        if nlp_result is not None:
+            nlp_fields = nlp_result
+            # Override sentiment with nlp_analyzer when it has high confidence
+            nlp_label = nlp_result.get("nlp_label", "")
+            nlp_conf = nlp_result.get("nlp_confidence", 0.0)
+            if nlp_label in ("positive", "negative", "neutral") and nlp_conf >= 0.6:
+                sentiment = nlp_label
+                score = nlp_result.get("nlp_sentiment_score", score)
+                reason = nlp_result.get("nlp_sentiment_reason", reason)
+                confidence = "high" if nlp_conf >= 0.8 else "medium"
+            elif nlp_label == "trash":
+                sentiment = "neutral"
+                classification_type = "informational"
+                signal_strength = "weak"
+                reason = nlp_result.get("nlp_sentiment_reason", "스팸/무의미 댓글로 판단")
+            # Enrich product detection from nlp_analyzer
+            nlp_products = nlp_result.get("nlp_product_mentions", [])
+            if nlp_products and not product_related:
+                product_related = True
+                if not target:
+                    target = _detect_target_from_nlp(nlp_products)
+
+    # Compute insight_type from video context + analysis result
+    is_inquiry = nlp_fields.get("nlp_is_inquiry", False)
+    nlp_topics_list = nlp_fields.get("nlp_topics", [])
+    insight_type = _infer_insight_type(video_type, classification_type, sentiment, is_inquiry, nlp_topics_list, source_text)
+
     return CommentAnalysisResult(
         product_related=product_related,
         product_target=target,
@@ -282,4 +347,113 @@ def analyze_comment_with_context(
         context_required_for_display=context_required,
         reason=reason,
         needs_review=needs_review,
+        insight_type=insight_type,
+        nlp_label=nlp_fields.get("nlp_label"),
+        nlp_confidence=nlp_fields.get("nlp_confidence"),
+        nlp_sentiment_reason=nlp_fields.get("nlp_sentiment_reason"),
+        nlp_topics=nlp_fields.get("nlp_topics", []),
+        nlp_topic_sentiments=nlp_fields.get("nlp_topic_sentiments", {}),
+        nlp_is_inquiry=nlp_fields.get("nlp_is_inquiry", False),
+        nlp_is_rhetorical=nlp_fields.get("nlp_is_rhetorical", False),
+        nlp_summary=nlp_fields.get("nlp_summary"),
+        nlp_keywords=nlp_fields.get("nlp_keywords", []),
+        nlp_product_mentions=nlp_fields.get("nlp_product_mentions", []),
+        nlp_language=nlp_fields.get("nlp_language"),
+        nlp_provider=nlp_fields.get("nlp_provider"),
+        nlp_model=nlp_fields.get("nlp_model"),
     )
+
+
+VIDEO_TYPE_PATTERNS: dict[str, list[str]] = {
+    "promotional": ["할인", "프로모션", "세일", "특가", "쿠팡", "최저가", "이벤트", "sale", "deal", "discount", "coupon"],
+    "review": ["리뷰", "후기", "사용기", "솔직", "장단점", "review", "honest", "pros and cons"],
+    "comparison": ["비교", "vs", "대결", "차이", "comparison", "versus", "which is better"],
+    "unboxing": ["언박싱", "개봉기", "unboxing", "first look"],
+    "tutorial": ["설치", "사용법", "설명", "how to", "tutorial", "guide", "방법"],
+    "official": ["공식", "official", "광고", "제조사"],
+}
+
+INSIGHT_TYPE_MAP: dict[tuple[str, str], str] = {
+    # (video_type, classification_type) → insight_type
+    ("promotional", "complaint"): "상품구성_피드백",
+    ("promotional", "preference"): "구매전환_증거",
+    ("promotional", "informational"): "구매_문의",
+    ("review", "complaint"): "품질_불만",
+    ("review", "preference"): "만족_포인트",
+    ("comparison", "complaint"): "경쟁사_비교",
+    ("comparison", "preference"): "경쟁사_비교",
+    ("comparison", "comparison"): "경쟁사_비교",
+    ("tutorial", "complaint"): "사용성_불만",
+    ("tutorial", "informational"): "사용_팁",
+    ("official", "complaint"): "품질_불만",
+    ("official", "preference"): "브랜드_신뢰",
+}
+
+
+def classify_video_type(title: str, channel: str = "") -> str:
+    """Infer video type from title/channel text."""
+    blob = f"{title or ''} {channel or ''}".lower()
+    for vtype, patterns in VIDEO_TYPE_PATTERNS.items():
+        if any(p in blob for p in patterns):
+            return vtype
+    return "general"
+
+
+_PURCHASE_KEYWORDS = ["구매", "샀", "샀어", "주문", "결제", "bought", "purchased", "ordered"]
+
+
+def _infer_insight_type(
+    video_type: str,
+    classification_type: str,
+    sentiment: str,
+    is_inquiry: bool,
+    nlp_topics: list[str] | None = None,
+    text: str = "",
+) -> str:
+    """Determine business insight type from video context + comment analysis."""
+    lowered = (text or "").lower()
+
+    if is_inquiry:
+        if video_type == "promotional":
+            return "구매_문의"
+        return "문의_피드백"
+
+    # Purchase confirmation detection (text-level)
+    if any(kw in lowered for kw in _PURCHASE_KEYWORDS):
+        if video_type == "promotional":
+            return "구매전환_증거"
+
+    mapped = INSIGHT_TYPE_MAP.get((video_type, classification_type))
+    if mapped:
+        return mapped
+
+    # Fallback based on sentiment + content
+    topics_blob = " ".join(nlp_topics or []).lower()
+    if sentiment == "negative":
+        if any(kw in topics_blob for kw in ["가격", "비용", "price", "cost"]):
+            return "가격_민감"
+        if any(kw in topics_blob for kw in ["수리", "서비스", "as", "repair", "service"]):
+            return "서비스_불만"
+        return "품질_불만"
+    if sentiment == "positive":
+        if video_type == "promotional":
+            return "구매전환_증거"
+        return "만족_포인트"
+    return "일반_의견"
+
+
+def _detect_target_from_nlp(product_mentions: list[str]) -> str | None:
+    """Map nlp_analyzer product_mentions to existing target labels."""
+    product_map = {
+        "냉장고": "refrigerator", "세탁기": "washer", "건조기": "dryer",
+        "식기세척기": "dishwasher", "드럼": "drum_washer", "통돌이": "top_load_washer",
+        "refrigerator": "refrigerator", "fridge": "refrigerator",
+        "washer": "washer", "dryer": "dryer", "dishwasher": "dishwasher",
+        "drum": "drum_washer",
+    }
+    for mention in product_mentions:
+        lowered = mention.lower().strip()
+        for key, target in product_map.items():
+            if key in lowered:
+                return target
+    return None

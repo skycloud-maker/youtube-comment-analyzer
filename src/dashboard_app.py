@@ -56,6 +56,7 @@ CLOUD_CACHE_META = CACHE_DIR / "dashboard_bundle_cloud_meta.json"
 CACHE_SCHEMA_VERSION = DASHBOARD_SETTINGS.cache_schema_version
 DASHBOARD_BUILD_LABEL = DASHBOARD_SETTINGS.build_label
 REGION_LABELS = {"KR": "\uD55C\uAD6D", "US": "\uBBF8\uAD6D"}
+REGION_OTHER_LABEL = "그 외"
 SENTIMENT_LABELS = {
     "positive": "\uAE0D\uC815",
     "negative": "\uBD80\uC815",
@@ -87,7 +88,7 @@ WEEKLY_CHART_DEFAULT = DASHBOARD_SETTINGS.weekly_chart_page_default
 WEEKLY_CHART_STEP = DASHBOARD_SETTINGS.weekly_chart_page_step
 DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
     ("comments", "comments.parquet"),
-    ("videos", "videos.parquet"),
+    ("videos", "videos_normalized.parquet"),
     ("brand_ratio", "brand_ratio.parquet"),
     ("cej_negative_rate", "cej_negative_rate.parquet"),
     ("negative_density", "negative_density.parquet"),
@@ -98,6 +99,11 @@ DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
     ("representative_bundles", "representative_bundles.parquet"),
     ("opinion_units", "opinion_units.parquet"),
     ("analysis_comments", "analysis_comments.parquet"),
+    ("nlp_topic_insights", "nlp_topic_insights.parquet"),
+    ("nlp_keyword_insights", "nlp_keyword_insights.parquet"),
+    ("nlp_inquiry_summary", "nlp_inquiry_summary.parquet"),
+    ("nlp_product_mentions", "nlp_product_mentions.parquet"),
+    ("nlp_sentiment_distribution", "nlp_sentiment_distribution.parquet"),
     ("monitoring_summary", "monitoring_summary.parquet"),
     ("reporting_summary", "reporting_summary.parquet"),
 )
@@ -248,8 +254,8 @@ def build_wordcloud_image(frequencies: tuple[tuple[str, int], ...], sentiment_co
     wc = WordCloud(
         width=1000,
         height=420,
-        background_color="white",
-        colormap="Greens" if sentiment_code == "positive" else "Oranges",
+        background_color="#ffffff",
+        colormap="Blues" if sentiment_code == "positive" else "Oranges",
         font_path=str(font_file),
         prefer_horizontal=0.9,
         max_words=60,
@@ -275,16 +281,16 @@ def build_donut_chart_image(rows: tuple[tuple[str, int, str], ...], sentiment_co
     counts = [row[1] for row in rows]
     shares = [row[2] for row in rows]
     colors = [
-        "#B8E0B2", "#95D29A", "#72BF7A", "#52AE61", "#34994D", "#1F8741"
+        "#93c5fd", "#60a5fa", "#3b82f6", "#2563eb", "#1d4ed8", "#1e40af"
     ] if sentiment_code == "positive" else [
-        "#FFC489", "#FFAB59", "#FF9138", "#F26A00", "#E85A00", "#D24D00"
+        "#fdba74", "#fb923c", "#f97316", "#ea580c", "#c2410c", "#9a3412"
     ]
     colors = colors[:len(labels)]
     font_prop = _get_font_prop()
 
     fig, ax = plt.subplots(figsize=(8.8, 4.8), dpi=180)
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
 
     display_labels = [f"{label}\n{share}" for label, share in zip(labels, shares)]
     ax.pie(
@@ -293,18 +299,18 @@ def build_donut_chart_image(rows: tuple[tuple[str, int, str], ...], sentiment_co
         colors=colors,
         startangle=90,
         counterclock=False,
-        wedgeprops={"width": 0.42, "edgecolor": "white", "linewidth": 1.2},
+        wedgeprops={"width": 0.38, "edgecolor": "white", "linewidth": 2},
         labeldistance=0.78,
         textprops={
             "fontsize": 10,
-            "color": "#24453b",
+            "color": "#334155",
             "ha": "center",
             "va": "center",
             "fontproperties": font_prop,
         },
     )
 
-    centre_circle = plt.Circle((0, 0), 0.38, fc="white")
+    centre_circle = plt.Circle((0, 0), 0.42, fc="white")
     ax.add_artist(centre_circle)
     ax.text(
         0,
@@ -312,9 +318,9 @@ def build_donut_chart_image(rows: tuple[tuple[str, int, str], ...], sentiment_co
         center_label,
         ha="center",
         va="center",
-        fontsize=16,
+        fontsize=17,
         fontweight="bold",
-        color="#24453b",
+        color="#1e293b",
         fontproperties=font_prop,
     )
     ax.set_aspect("equal")
@@ -395,6 +401,7 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
             parent_comment=_safe_text(row.get(COL_CONTEXT, "")) or None,
             context_comments=[_safe_text(row.get(COL_CONTEXT, ""))] if _safe_text(row.get(COL_CONTEXT, "")) else None,
             is_reply=bool(_safe_text(row.get("parent_comment_id", ""))),
+            use_nlp=False,  # Dashboard에서는 LLM API 호출 방지 (과금 방지)
         )
         return pd.Series({
             "display_sentiment": result.sentiment_label or "neutral",
@@ -406,6 +413,7 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
             "display_product_target": result.product_target or "",
             "display_reason": result.reason,
             "display_needs_review": result.needs_review,
+            "insight_type": result.insight_type,
         })
 
     analysis_df = working.apply(_reanalyze, axis=1)
@@ -451,38 +459,181 @@ def apply_theme() -> None:
     st.markdown(
         """
         <style>
-        .stApp {background: #f6f8f5; color: #123b2f;}
-        header[data-testid="stHeader"] {background: rgba(246,248,245,0.92); backdrop-filter: blur(6px);}
-        section[data-testid="stSidebar"] {background: #ffffff; border-right: 1px solid #e6ece8;}
-        .block-container {padding-top: 5.2rem; padding-bottom: 2rem; max-width: 1240px;}
-        .voc-card {background: #ffffff; border: 1px solid #e5ece7; border-radius: 18px; padding: clamp(12px, 1.3vw, 18px); box-shadow: 0 10px 30px rgba(16, 64, 48, 0.05); min-height: clamp(88px, 9vw, 112px);}
-        .voc-card h4 {margin: 0; font-size: clamp(11px, 0.9vw, 14px); color: #6d8177; font-weight: 600; line-height: 1.35;}
-        .voc-card p {margin: 8px 0 0; font-size: clamp(18px, 1.8vw, 30px); font-weight: 700; color: #0d4b3a; line-height: 1.1; word-break: keep-all;}
-        .voc-panel {background: #ffffff; border: 1px solid #e5ece7; border-radius: 24px; padding: clamp(16px, 1.4vw, 22px); box-shadow: 0 10px 30px rgba(16, 64, 48, 0.05); overflow: hidden;}
-        .voc-chip {display: inline-block; padding: 4px 10px; border-radius: 999px; background: #e8f5ef; color: #0d7b57; font-size: 12px; margin-right: 8px;}
+        /* ===== Foundation ===== */
+        :root {
+            --bg-main: #f4f6f9;
+            --bg-card: #ffffff;
+            --bg-sidebar: #1a2332;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --text-muted: #94a3b8;
+            --accent-primary: #3b82f6;
+            --accent-positive: #10b981;
+            --accent-negative: #f97316;
+            --accent-neutral: #6366f1;
+            --border: #e2e8f0;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.06);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.08);
+            --radius-sm: 10px;
+            --radius-md: 14px;
+            --radius-lg: 20px;
+        }
+
+        /* ===== App Shell ===== */
+        .stApp {background: var(--bg-main); color: var(--text-primary); font-family: 'Pretendard', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;}
+        header[data-testid="stHeader"] {background: rgba(244,246,249,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);}
+        .block-container {padding-top: 4.5rem; padding-bottom: 2rem; max-width: 1320px;}
+
+        /* ===== Sidebar ===== */
+        section[data-testid="stSidebar"] {background: var(--bg-sidebar); border-right: none;}
+        section[data-testid="stSidebar"] * {color: #cbd5e1 !important;}
+        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {color: #f1f5f9 !important;}
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-md); padding: 10px 12px;}
+        section[data-testid="stSidebar"] [data-baseweb="tag"] {background: rgba(59,130,246,0.15) !important; border: 1px solid rgba(59,130,246,0.3) !important; color: #93c5fd !important; border-radius: 999px !important;}
+        section[data-testid="stSidebar"] [data-testid="stExpander"] {border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm); overflow: hidden;}
+        section[data-testid="stSidebar"] .stTextInput > div > div {border-radius: var(--radius-sm); background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15);}
+        section[data-testid="stSidebar"] .stSlider {padding-top: 6px;}
+        section[data-testid="stSidebar"] label {color: #94a3b8 !important; font-weight: 500;}
+
+        /* ===== KPI Cards ===== */
+        .voc-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: clamp(14px, 1.4vw, 20px);
+            box-shadow: var(--shadow-sm);
+            min-height: clamp(90px, 9vw, 110px);
+            transition: box-shadow 0.2s, transform 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .voc-card:hover {box-shadow: var(--shadow-md); transform: translateY(-1px);}
+        .voc-card h4 {margin: 0; font-size: 12px; color: var(--text-secondary); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;}
+        .voc-card p {margin: 6px 0 0; font-size: clamp(22px, 2vw, 32px); font-weight: 800; color: var(--text-primary); line-height: 1.15; word-break: keep-all;}
+        .voc-card .voc-card-delta {font-size: 13px; font-weight: 600; margin-top: 4px; display: inline-flex; align-items: center; gap: 3px;}
+        .voc-card .voc-card-delta.positive {color: var(--accent-positive);}
+        .voc-card .voc-card-delta.negative {color: var(--accent-negative);}
+        .voc-card .voc-card-sub {font-size: 11px; color: var(--text-muted); margin-top: 2px;}
+        .voc-card::after {content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 3px; border-radius: 0 0 var(--radius-md) var(--radius-md);}
+        .voc-card.accent-blue::after {background: var(--accent-primary);}
+        .voc-card.accent-green::after {background: var(--accent-positive);}
+        .voc-card.accent-orange::after {background: var(--accent-negative);}
+        .voc-card.accent-purple::after {background: var(--accent-neutral);}
+
+        /* ===== Panels / Containers ===== */
+        .voc-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: clamp(18px, 1.6vw, 26px);
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+
+        /* ===== Section Headers ===== */
+        .stApp h3 {
+            font-size: 18px !important;
+            font-weight: 700 !important;
+            color: var(--text-primary) !important;
+            letter-spacing: -0.01em;
+            padding-bottom: 4px;
+            border-bottom: 2px solid var(--accent-primary);
+            display: inline-block;
+        }
+
+        /* ===== Chips & Tags ===== */
+        .voc-chip {display: inline-block; padding: 4px 12px; border-radius: 999px; background: #eff6ff; color: var(--accent-primary); font-size: 12px; font-weight: 600; margin-right: 6px; border: 1px solid #dbeafe;}
+
+        /* ===== Legend ===== */
         .voc-legend {display: flex; flex-wrap: wrap; gap: 8px 10px; margin-top: 8px; margin-bottom: 6px;}
         .voc-legend-compact {display: flex; flex-direction: column; gap: 10px; padding: 10px 0 4px;}
         .voc-donut-wrap {display: flex; align-items: center; gap: 20px;}
         .voc-donut-chart {flex: 0 0 min(64%, 520px); min-width: 260px;}
         .voc-donut-side {flex: 1 1 260px; min-width: 220px;}
-        .voc-legend-item {display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #e5ece7; border-radius: 999px; background: #fbfcfb; font-size: 13px; color: #48665b; line-height: 1.2;}
+        .voc-legend-item {display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; background: #fafbfc; font-size: 13px; color: var(--text-secondary); line-height: 1.2;}
         .voc-legend-swatch {width: 10px; height: 10px; border-radius: 999px; display: inline-block; flex: 0 0 auto;}
-        .voc-comment-card {background: #f9fbfa; border: 1px solid #e5ece7; border-radius: 16px; padding: 14px 16px; margin-bottom: 12px;}
-        .voc-comment-meta {font-size: 12px; color: #6d8177; margin-bottom: 8px;}
-        .voc-comment-text {font-size: 14px; line-height: 1.6; color: #123b2f; white-space: pre-wrap;}
-        .voc-reason {margin: 12px 0 18px; padding: 12px 14px; border-radius: 14px; background: #eef7f3; border-left: 5px solid #0d7b57; font-size: 15px; font-weight: 700; color: #0f4a39; line-height: 1.45;}
-        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {background:#ffffff; border:1px solid #e5ece7; border-radius:18px; padding:10px 12px; box-shadow:0 6px 18px rgba(16,64,48,0.04);}
-        section[data-testid="stSidebar"] [data-baseweb="tag"] {background:#eef7f3 !important; border:1px solid #d7ebe1 !important; color:#0f4a39 !important; border-radius:999px !important;}
-        section[data-testid="stSidebar"] [data-testid="stExpander"] {border:1px solid #e5ece7; border-radius:14px; overflow:hidden;}
-        section[data-testid="stSidebar"] .stTextInput > div > div {border-radius:14px;}
-        section[data-testid="stSidebar"] .stSlider {padding-top:6px;}
+
+        /* ===== Comment Cards ===== */
+        .voc-comment-card {background: #fafbfc; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px 18px; margin-bottom: 10px;}
+        .voc-comment-meta {font-size: 12px; color: var(--text-muted); margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap;}
+        .voc-comment-text {font-size: 14px; line-height: 1.7; color: var(--text-primary); white-space: pre-wrap;}
+
+        /* ===== Reason Block ===== */
+        .voc-reason {
+            margin: 12px 0 18px;
+            padding: 14px 16px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+            border-left: 4px solid var(--accent-primary);
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e40af;
+            line-height: 1.55;
+        }
+
+        /* ===== NLP Insight Badge ===== */
+        .nlp-badge {display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em;}
+        .nlp-badge.positive {background: #d1fae5; color: #065f46;}
+        .nlp-badge.negative {background: #ffedd5; color: #9a3412;}
+        .nlp-badge.neutral {background: #e0e7ff; color: #3730a3;}
+        .nlp-badge.trash {background: #f1f5f9; color: #475569;}
+        .insight-badge {display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; background: #faf5ff; color: #7c3aed; border: 1px solid #ede9fe;}
+
+        /* ===== Data Tables ===== */
+        [data-testid="stDataFrame"] {border-radius: var(--radius-sm); overflow: hidden;}
+        [data-testid="stDataFrame"] table {font-size: 13px;}
+
+        /* ===== Expanders ===== */
+        [data-testid="stExpander"] {border: 1px solid var(--border) !important; border-radius: var(--radius-sm) !important; overflow: hidden;}
+
+        /* ===== Tabs ===== */
+        [data-testid="stTabs"] [data-baseweb="tab-list"] {gap: 0; border-bottom: 2px solid var(--border);}
+        [data-testid="stTabs"] [data-baseweb="tab"] {font-weight: 600; font-size: 14px; padding: 10px 20px; border-bottom: 3px solid transparent; color: var(--text-secondary);}
+        [data-testid="stTabs"] [aria-selected="true"] {border-bottom-color: var(--accent-primary) !important; color: var(--accent-primary) !important;}
+
+        /* ===== Containers with border ===== */
+        [data-testid="stVerticalBlockBorderWrapper"] {border-color: var(--border) !important; border-radius: var(--radius-md) !important; box-shadow: var(--shadow-sm);}
+
+        /* ===== Download Button ===== */
+        .stDownloadButton > button {background: var(--accent-primary) !important; color: #fff !important; border: none !important; border-radius: var(--radius-sm) !important; font-weight: 600 !important; padding: 8px 20px !important; box-shadow: 0 2px 8px rgba(59,130,246,0.25) !important; transition: all 0.2s;}
+        .stDownloadButton > button:hover {background: #2563eb !important; box-shadow: 0 4px 12px rgba(59,130,246,0.35) !important; transform: translateY(-1px);}
+
+        /* ===== Metrics Row ===== */
+        .voc-metrics-row {display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;}
+        .voc-metrics-row > * {flex: 1; min-width: 160px;}
+
+        /* ===== Responsive ===== */
         @media (max-width: 1200px) { .block-container {max-width: 100%;} }
-        @media (max-width: 980px) { .voc-card p {font-size: clamp(16px, 3vw, 22px);} }
+        @media (max-width: 980px) { .voc-card p {font-size: clamp(18px, 3vw, 24px);} }
+        @media (max-width: 768px) { .voc-donut-wrap {flex-direction: column;} .voc-donut-chart {flex: 1; min-width: unset;} }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+
+
+PRODUCT_TARGET_KR_MAP = {
+    "refrigerator": "냉장고",
+    "washer": "세탁기",
+    "dryer": "건조기",
+    "dishwasher": "식기세척기",
+    "drum_washer": "드럼세탁기",
+    "top_load_washer": "통돌이세탁기",
+    "air_conditioner": "에어컨",
+    "microwave": "전자레인지",
+    "vacuum": "청소기",
+    "styler": "스타일러",
+}
+
+
+def localize_product_target(value: str) -> str:
+    """Map English product_target to Korean product sub-category."""
+    raw = _safe_text(value)
+    if not raw:
+        return ""
+    return PRODUCT_TARGET_KR_MAP.get(raw.lower().strip(), raw)
 
 
 def localize_region(value: str) -> str:
@@ -496,7 +647,10 @@ def localize_sentiment(value: str) -> str:
 
 def region_codes_from_labels(values: list[str]) -> list[str]:
     selected = set(values or [])
-    return [code for code, label in REGION_LABELS.items() if label in selected or code in selected]
+    codes = [code for code, label in REGION_LABELS.items() if label in selected or code in selected]
+    if REGION_OTHER_LABEL in selected:
+        codes.append(REGION_OTHER_LABEL)
+    return codes
 
 
 BRAND_CANONICAL_MAP = {
@@ -830,8 +984,35 @@ def _decision_badge(decision: str) -> tuple[str, str]:
     return mapping.get(decision, ("검토 필요", "대표성 판단 정보가 부족해 추가 검토가 필요합니다."))
 
 
-def render_card(title: str, value: str) -> None:
-    st.markdown(f'<div class="voc-card"><h4>{title}</h4><p>{value}</p></div>', unsafe_allow_html=True)
+def render_card(
+    title: str,
+    value: str,
+    delta: str | None = None,
+    delta_direction: str | None = None,
+    subtitle: str | None = None,
+    accent: str = "",
+) -> None:
+    """Render a KPI metric card.
+
+    Args:
+        title: Card header label.
+        value: Main metric value (large text).
+        delta: Optional delta text (e.g. "+2.5%").
+        delta_direction: "positive" or "negative" for arrow direction/color.
+        subtitle: Optional small text below value (e.g. "전주 대비").
+        accent: Card accent color class ("blue", "green", "orange", "purple").
+    """
+    accent_cls = f" accent-{accent}" if accent else ""
+    delta_html = ""
+    if delta:
+        direction = delta_direction or ("positive" if delta.startswith("+") else "negative")
+        arrow = "&#9650;" if direction == "positive" else "&#9660;"
+        delta_html = f'<div class="voc-card-delta {direction}">{arrow} {delta}</div>'
+    sub_html = f'<div class="voc-card-sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f'<div class="voc-card{accent_cls}"><h4>{title}</h4><p>{value}</p>{delta_html}{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -886,6 +1067,12 @@ def add_localized_columns(comments_df: pd.DataFrame) -> pd.DataFrame:
     working[COL_SENTIMENT] = working[COL_SENTIMENT_CODE].map(localize_sentiment)
     working[COL_CEJ] = topic_series.map(canonicalize_cej)
     working[COL_BRAND] = brand_series.map(canonicalize_brand)
+    # Enrich product with sub-category from product_target when available
+    if "product_target" in working.columns:
+        sub_product = working["product_target"].map(localize_product_target)
+        has_sub = sub_product.fillna("").ne("")
+        working.loc[has_sub, "product"] = sub_product[has_sub]
+
     working[COL_WRITTEN_AT] = pd.to_datetime(published_series, errors="coerce", utc=True).dt.tz_localize(None)
     working[COL_WEEK_START] = working[COL_WRITTEN_AT].dt.to_period("W-SUN").dt.start_time
     working[COL_WEEK_LABEL] = working[COL_WEEK_START].dt.strftime("%Y-%m-%d")
@@ -975,7 +1162,13 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     if products:
         base_comments = base_comments[base_comments["product"].isin(products)]
     if regions and COL_COUNTRY in base_comments.columns:
-        base_comments = base_comments[base_comments[COL_COUNTRY].isin(regions)]
+        known_labels = set(REGION_LABELS.values())
+        if REGION_OTHER_LABEL in regions:
+            base_comments = base_comments[
+                base_comments[COL_COUNTRY].isin(regions) | ~base_comments[COL_COUNTRY].isin(known_labels)
+            ]
+        else:
+            base_comments = base_comments[base_comments[COL_COUNTRY].isin(regions)]
     if cej and COL_CEJ in base_comments.columns:
         base_comments = base_comments[base_comments[COL_CEJ].isin(cej)]
     if brands and COL_BRAND in base_comments.columns:
@@ -1097,15 +1290,20 @@ def build_weekly_sentiment_window(comments_df: pd.DataFrame, weeks_per_view: int
 
 
 def _normalize_pill_state(key: str, options: list[str], defaults: list[str]) -> list[str]:
+    """Normalize pill selection state. Returns the default when no session state exists yet.
+    If user explicitly cleared the selection (empty list in session_state), respect that."""
     valid_defaults = [item for item in defaults if item in options]
     if not valid_defaults:
         valid_defaults = list(options)
-    current = st.session_state.get(key, valid_defaults)
+    if key not in st.session_state:
+        # First load — use defaults (= all selected)
+        st.session_state[key] = list(valid_defaults)
+        return list(valid_defaults)
+    current = st.session_state[key]
     if not isinstance(current, list):
         current = list(valid_defaults)
     normalized = [item for item in current if item in options]
-    if not normalized:
-        normalized = list(valid_defaults)
+    # Respect empty selection — user may have clicked "전체 해제"
     if st.session_state.get(key) != normalized:
         st.session_state[key] = normalized
     return normalized
@@ -1253,6 +1451,9 @@ def _build_bundle_showcase(filtered_comments: pd.DataFrame, sentiment: str, limi
                 "pii_flag": _safe_text(sample.get("pii_flag", "N")) or "N",
             })
         bundle_row = row.copy()
+        # Deduplicate index to prevent InvalidIndexError when building DataFrame
+        if bundle_row.index.duplicated().any():
+            bundle_row = bundle_row[~bundle_row.index.duplicated(keep="first")]
         bundle_row["cluster_size"] = cluster_size
         bundle_row["sample_comments_json"] = json.dumps(sample_comments, ensure_ascii=False)
         likes_value = int(pd.to_numeric(bundle_row.get(COL_LIKES, bundle_row.get("like_count", bundle_row.get("top_likes_count", 0))), errors="coerce") or 0)
@@ -1263,8 +1464,9 @@ def _build_bundle_showcase(filtered_comments: pd.DataFrame, sentiment: str, limi
             break
 
     if not picked:
-        return pd.DataFrame(columns=candidate_pool.columns)
-    return pd.DataFrame(picked)
+        return pd.DataFrame()
+    records = [s.to_dict() for s in picked]
+    return pd.DataFrame(records)
 
 
 def _rows_from_representative_bundles(bundle_df: pd.DataFrame, sentiment: str, limit: int = 5) -> pd.DataFrame:
@@ -1479,7 +1681,7 @@ def build_cej_trust_frame(filtered_comments: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values([COL_CEJ, "product", COL_COUNTRY, COL_BRAND], na_position="last")
 
 
-def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None) -> None:
+def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None, key_suffix: str = "") -> None:
     st.subheader("핵심 대표 코멘트")
     st.caption("현재 필터 범위에서 반복적으로 나타나는 제품 의견을 대표 이슈 중심으로 압축해 보여줍니다. 먼저 핵심 코멘트를 읽고, 필요할 때만 유사 댓글과 상세 정보를 펼쳐보세요.")
 
@@ -1495,14 +1697,14 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
     if negative_showcase.empty and positive_showcase.empty:
         fallback_showcase = _build_bundle_showcase(filtered_comments, sentiment="", limit=5)
         st.warning("현재 조건에서 강한 긍정/부정 대표 코멘트가 부족해, 의미 있는 유효 댓글을 우선 보여줍니다.")
-        render_comment_table(fallback_showcase, key_prefix="neutral", source_comments=source_for_cards)
+        render_comment_table(fallback_showcase, key_prefix=f"neutral{key_suffix}", source_comments=source_for_cards)
         return
 
     st.write(f"부정 핵심 대표 이슈 {len(negative_showcase):,}건")
-    render_comment_table(negative_showcase, key_prefix="negative", source_comments=source_for_cards)
+    render_comment_table(negative_showcase, key_prefix=f"negative{key_suffix}", source_comments=source_for_cards)
 
     st.write(f"긍정 핵심 대표 이슈 {len(positive_showcase):,}건")
-    render_comment_table(positive_showcase, key_prefix="positive", source_comments=source_for_cards)
+    render_comment_table(positive_showcase, key_prefix=f"positive{key_suffix}", source_comments=source_for_cards)
 
 
 def _collect_similar_comments_for_download(
@@ -1641,6 +1843,72 @@ def _collect_similar_comments_from_samples(selected: pd.Series) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+def _build_similar_comments(
+    pool: pd.DataFrame,
+    selected: pd.Series,
+    working_selected: pd.Series,
+    sentiment_name: str,
+    rep_id: str,
+    video_id: str,
+) -> pd.DataFrame:
+    """Build a DataFrame of similar comments for a representative comment card."""
+    if pool.empty:
+        return pd.DataFrame()
+    working_pool = pool.copy()
+
+    video_link_for_filter = _safe_text(working_selected.get(COL_VIDEO_LINK, selected.get(COL_VIDEO_LINK, "")))
+    if video_id and "video_id" in working_pool.columns:
+        working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
+    elif video_link_for_filter:
+        if COL_VIDEO_LINK in working_pool.columns:
+            working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
+        elif "video_url" in working_pool.columns:
+            working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
+
+    if "comment_validity" in working_pool.columns:
+        working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
+    if "sentiment_label" in working_pool.columns:
+        working_pool = working_pool[working_pool["sentiment_label"].astype(str) == sentiment_name].copy()
+    elif "sentiment_code" in working_pool.columns:
+        working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
+
+    if rep_id:
+        for key in ["comment_id", "source_content_id", "opinion_id"]:
+            if key in working_pool.columns:
+                working_pool = working_pool[working_pool[key].astype(str) != rep_id].copy()
+
+    def _coerce_scalar(value):
+        if isinstance(value, pd.Series):
+            return value.iloc[0] if not value.empty else ""
+        if isinstance(value, (list, tuple)):
+            return value[0] if value else ""
+        return value
+
+    records = []
+    for _, row in working_pool.iterrows():
+        text = _safe_text(_coerce_scalar(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", "")))))
+        if not text.strip():
+            continue
+        cid = ""
+        for key in ["comment_id", "source_content_id", "opinion_id"]:
+            if key in working_pool.columns:
+                candidate = _safe_text(_coerce_scalar(row.get(key, "")))
+                if candidate:
+                    cid = candidate
+                    break
+        records.append({
+            "comment_id": cid,
+            "원문": text,
+            "좋아요 수": int(pd.to_numeric(_coerce_scalar(row.get(COL_LIKES, row.get("like_count", 0))), errors="coerce") or 0),
+            "작성일시": _safe_text(_coerce_scalar(row.get(COL_WRITTEN_AT, row.get("published_at", "")))),
+        })
+
+    result = pd.DataFrame(records)
+    if not result.empty:
+        result = result.drop_duplicates(subset=["comment_id", "원문"]).copy()
+    return result
+
+
 def _localized_video_title(title: str) -> str:
     clean = _safe_text(title)
     if not clean:
@@ -1654,9 +1922,9 @@ def _localized_video_title(title: str) -> str:
 
 
 def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source_comments: pd.DataFrame | None = None) -> None:
-    if key_prefix == "negative":
+    if key_prefix.startswith("negative"):
         sentiment_name = "negative"
-    elif key_prefix == "positive":
+    elif key_prefix.startswith("positive"):
         sentiment_name = "positive"
     else:
         sentiment_name = "neutral"
@@ -1668,171 +1936,139 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
     top_rows = comment_showcase.reset_index(drop=True)
     for idx, selected in top_rows.iterrows():
         with st.container(border=True):
-            aspect_label = _safe_text(selected.get("topic_label", "")) or _safe_text(selected.get("aspect_key", "")) or f"대표 코멘트 {idx + 1}"
-            st.markdown(f"#### {idx + 1}. {aspect_label}")
+            # --- Data extraction ---
+            aspect_label = _safe_text(selected.get("topic_label", "")) or _safe_text(selected.get("aspect_key", "")) or f"이슈 {idx + 1}"
             likes_value = pd.to_numeric(selected.get(COL_LIKES, 0), errors="coerce")
             likes = 0 if pd.isna(likes_value) else int(likes_value)
             cluster_size = int(pd.to_numeric(selected.get("cluster_size", 1), errors="coerce") or 1)
-            st.caption(f"이 코멘트는 같은 이슈의 유사 의견 {cluster_size:,}건을 대표합니다.")
-            st.caption(f"??? {_safe_text(selected.get('product', '-')) or '-'} - {COL_CEJ}: {_safe_text(selected.get(COL_CEJ, '-')) or '-'} - {COL_BRAND}: {_safe_text(selected.get(COL_BRAND, '-')) or '-'} - ??? ? {likes:,}")
-            
-
-            video_title_raw = _safe_text(selected.get(COL_VIDEO_TITLE, '-')) or '-'
-            video_title = _localized_video_title(video_title_raw)
-            video_link = _safe_text(selected.get(COL_VIDEO_LINK, '#')) or '#'
-            st.markdown(f"[{video_title}]({video_link})")
-            if video_title != video_title_raw and video_title_raw not in {'', '-'}:
-                st.caption(f"원제: {video_title_raw}")
 
             working_selected = _enrich_card_row_from_source(selected.copy(), source_comments)
             original_text = _safe_text(working_selected.get(COL_ORIGINAL, ""))
-            raw_translation = _safe_text(working_selected.get(COL_TRANSLATION, ""))
             language = _safe_text(working_selected.get(COL_LANGUAGE, "")).lower()
             is_korean = language.startswith("ko") or _looks_korean_text(original_text)
+            raw_translation = _safe_text(working_selected.get(COL_TRANSLATION, ""))
             translation = _resolve_card_translation(original_text, raw_translation, is_korean)
-            working_selected[COL_TRANSLATION] = translation
+            display_text = original_text if is_korean else (translation or original_text)
 
-            inquiry_flag = bool(working_selected.get("inquiry_flag", False))
-            inquiry_types = _safe_text(working_selected.get("inquiry_type_json", ""))
-            if inquiry_flag:
-                st.caption(f"문의 flag 적용 · 유형: {inquiry_types or '확인 필요'}")
+            nlp_label_val = _safe_text(working_selected.get("nlp_label", ""))
+            insight_type_val = _safe_text(selected.get("insight_type", ""))
+            product_val = _safe_text(selected.get("product", ""))
+            cej_val = _safe_text(selected.get(COL_CEJ, ""))
+            brand_val = _safe_text(selected.get(COL_BRAND, ""))
+            nlp_summary_text = _safe_text(working_selected.get("nlp_summary", ""))
+            nlp_reason = _safe_text(working_selected.get("nlp_sentiment_reason", ""))
+            nlp_kw_val = working_selected.get("nlp_keywords", [])
+            if not isinstance(nlp_kw_val, list):
+                nlp_kw_val = []
 
-            st.markdown("**왜 이 코멘트가 대표인가**")
-            selection_reason = _build_selection_narrative(working_selected, source_comments, sentiment_name)
-            st.markdown(f'<div class="voc-reason">{selection_reason}</div>', unsafe_allow_html=True)
+            # ============================================================
+            # HEADER: 번호 + 토픽명 + 메타 배지
+            # ============================================================
+            badge_html_parts = [f'<strong style="font-size:16px;">{idx + 1}. {aspect_label}</strong>']
+            if product_val:
+                badge_html_parts.append(f'<span class="voc-chip">{product_val}</span>')
+            if cej_val and cej_val != "기타":
+                badge_html_parts.append(f'<span class="voc-chip">{cej_val}</span>')
+            if brand_val and brand_val != "미언급":
+                badge_html_parts.append(f'<span class="voc-chip">{brand_val}</span>')
+            if insight_type_val and insight_type_val != "일반_의견":
+                badge_html_parts.append(f'<span class="insight-badge">{insight_type_val}</span>')
+            badge_html_parts.append(f'<span style="color:#94a3b8; font-size:12px;">👍 {likes:,} · 유사 {cluster_size:,}건</span>')
 
-            voc_items = _extract_voc_items(working_selected, sentiment_name)
-            if voc_items:
-                st.markdown("**해석 보조 정보**")
-                for item in voc_items:
-                    evidence = _safe_text(item.get("evidence_span", "")) or "근거 문구 확인 필요"
-                    st.markdown(f"- **[{item['sentiment']}] {item['topic']}**: {item['insight']} (근거: {evidence})")
+            st.markdown(
+                f'<div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px;">{"".join(badge_html_parts)}</div>',
+                unsafe_allow_html=True,
+            )
 
-            primary_label = "핵심 코멘트(원문)" if is_korean else "핵심 코멘트(번역 참고)"
-            primary_text = original_text if is_korean else (translation or "한국어 번역을 준비 중입니다.")
-            st.markdown(f"**{primary_label}**")
-            st.write(_summarize_original_for_preview(primary_text))
+            # ============================================================
+            # 구조화된 NLP 분석 결과 (판단근거 + 요약 + 토픽감성 + 키워드)
+            # ============================================================
+            # 감성 배지
+            if nlp_label_val:
+                sentiment_colors = {"positive": "#2563eb", "negative": "#dc2626", "neutral": "#6b7280", "trash": "#9333ea"}
+                sentiment_labels = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸"}
+                s_color = sentiment_colors.get(nlp_label_val, "#6b7280")
+                s_label = sentiment_labels.get(nlp_label_val, nlp_label_val)
+                st.markdown(
+                    f'<div style="display:inline-block; background:{s_color}; color:white; padding:4px 16px; border-radius:20px; font-size:14px; font-weight:600; margin-bottom:8px;">'
+                    f'{s_label} ({nlp_label_val})</div>',
+                    unsafe_allow_html=True,
+                )
 
-            if _is_long_text(primary_text):
-                with st.expander("원문 전체 보기" if is_korean else "번역 전체 보기"):
-                    st.write(primary_text)
+            # 판단 근거
+            if nlp_reason:
+                st.markdown(
+                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">판단 근거</span></div>'
+                    f'<div style="background:#f8fafc; border-left:3px solid #94a3b8; padding:8px 12px; font-size:14px; color:#334155; margin-bottom:8px;">{nlp_reason}</div>',
+                    unsafe_allow_html=True,
+                )
 
-            if not is_korean:
-                with st.expander("원문(Original) 보기"):
+            # AI 요약
+            if nlp_summary_text:
+                st.markdown(
+                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">요약</span></div>'
+                    f'<div style="font-size:14px; color:#1e293b; font-style:italic; margin-bottom:8px;">{nlp_summary_text}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # 키워드 칩
+            if nlp_kw_val:
+                kw_chips = " ".join(
+                    f'<span style="display:inline-block; background:#e2e8f0; color:#334155; padding:3px 10px; border-radius:12px; font-size:12px; margin:2px;">{kw}</span>'
+                    for kw in nlp_kw_val[:6]
+                )
+                st.markdown(
+                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">키워드</span></div>'
+                    f'<div style="margin-bottom:8px;">{kw_chips}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # ============================================================
+            # 관련 영상 + 날짜
+            # ============================================================
+            video_title_raw = _safe_text(selected.get(COL_VIDEO_TITLE, '')) or ''
+            video_title = _localized_video_title(video_title_raw) if video_title_raw else ''
+            video_link = _safe_text(selected.get(COL_VIDEO_LINK, '')) or ''
+            written_at = _safe_text(working_selected.get(COL_WRITTEN_AT, working_selected.get("published_at", "")))
+            meta_parts = []
+            if video_title and video_link:
+                meta_parts.append(f'<a href="{video_link}" target="_blank">{video_title[:60]}{"…" if len(video_title) > 60 else ""}</a>')
+            if written_at:
+                meta_parts.append(str(written_at)[:10])
+            if meta_parts:
+                st.caption(" · ".join(meta_parts), unsafe_allow_html=True)
+
+            # ============================================================
+            # 원문 보기 (expander)
+            # ============================================================
+            with st.expander("원문 보기"):
+                st.write(display_text)
+                if not is_korean and original_text:
+                    st.markdown("**원문(Original)**")
                     st.write(original_text)
 
-            # ✅ 대표 코멘트(현재 카드) 고유 ID (있으면)
+            # ============================================================
+            # 유사 댓글
+            # ============================================================
             rep_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
-
-            # ✅ 이 대표 코멘트가 속한 영상 식별 (video_id 우선, 없으면 video_link로)
             video_id = _safe_text(selected.get("video_id", "")) or _safe_text(working_selected.get("video_id", ""))
-            video_link_for_filter = _safe_text(working_selected.get(COL_VIDEO_LINK, selected.get(COL_VIDEO_LINK, "")))
 
             pool = source_comments if source_comments is not None else pd.DataFrame()
-            if pool.empty:
-                similar_comments = pd.DataFrame()
-            else:
-                working_pool = pool.copy()
+            similar_comments = _build_similar_comments(pool, selected, working_selected, sentiment_name, rep_id, video_id)
 
-                # 1) 영상 필터: video_id가 있으면 video_id로, 없으면 링크로
-                if video_id and "video_id" in working_pool.columns:
-                    working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
-                elif video_link_for_filter:
-                    if COL_VIDEO_LINK in working_pool.columns:
-                        working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
-                    elif "video_url" in working_pool.columns:
-                        working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
-    
-                # 2) 분석 대상(valid)만
-                if "comment_validity" in working_pool.columns:
-                    working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
-
-                # 3) 같은 감성만
-                if "sentiment_label" in working_pool.columns:
-                    working_pool = working_pool[working_pool["sentiment_label"].astype(str) == sentiment_name].copy()
-                elif "sentiment_code" in working_pool.columns:
-                    working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
-
-                # 4) 대표 코멘트 제외 (comment_id / source_content_id / opinion_id 중 있는 걸로)
-                if rep_id:
-                    if "comment_id" in working_pool.columns:
-                        working_pool = working_pool[working_pool["comment_id"].astype(str) != rep_id].copy()
-                    if "source_content_id" in working_pool.columns:
-                        working_pool = working_pool[working_pool["source_content_id"].astype(str) != rep_id].copy()
-                    if "opinion_id" in working_pool.columns:
-                        working_pool = working_pool[working_pool["opinion_id"].astype(str) != rep_id].copy()
-
-                # ✅ 유사 댓글(=대표 제외 나머지 전부) 테이블 생성
-                # (번역은 대량 처리 시 비용이 커서 CSV에는 원문 중심으로 제공)
-                def _get_text(row):
-                    return _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", row.get("display_text", "")))))
-
-                def _get_likes(row):
-                    return int(pd.to_numeric(row.get(COL_LIKES, row.get("like_count", row.get("likes_count", 0))), errors="coerce") or 0)
-
-                def _get_written_at(row):
-                    return _safe_text(row.get(COL_WRITTEN_AT, row.get("published_at", "")))
-
-                def _get_pii(row):
-                    return "있음" if _safe_text(row.get("pii_flag", "N")) == "Y" else "없음"
-
-
-                # ? ?? ?? + ?? ??
-                def _coerce_scalar(value):
-                    if isinstance(value, pd.Series):
-                        return value.iloc[0] if not value.empty else ""
-                    if isinstance(value, (list, tuple)):
-                        return value[0] if value else ""
-                    return value
-
-                similar_records = []
-                for _, pool_row in working_pool.iterrows():
-                    comment_id_value = ""
-                    for key in ["comment_id", "source_content_id", "opinion_id"]:
-                        if key in working_pool.columns:
-                            candidate = _safe_text(_coerce_scalar(pool_row.get(key, "")))
-                            if candidate:
-                                comment_id_value = candidate
-                                break
-                    similar_records.append({
-                        "comment_id": comment_id_value,
-                        "원문": _safe_text(_coerce_scalar(_get_text(pool_row))),
-                        "좋아요 수": int(pd.to_numeric(_coerce_scalar(_get_likes(pool_row)), errors="coerce") or 0),
-                        "PII": _safe_text(_coerce_scalar(_get_pii(pool_row))) or "없음",
-                        "작성일시": _safe_text(_coerce_scalar(_get_written_at(pool_row))),
-                    })
-
-                similar_comments = pd.DataFrame(
-                    similar_records,
-                    columns=["comment_id", "원문", "좋아요 수", "PII", "작성일시"],
-                )
-                if not similar_comments.empty:
-                    similar_comments = similar_comments[
-                        similar_comments["원문"].fillna("").astype(str).str.strip().ne("")
-                    ].drop_duplicates(subset=["comment_id", "원문"]).copy()
-
-
-
-
-
-            # ✅ UI: 유사 댓글(대표 제외 나머지 전체) 표시/다운로드
-            if similar_comments.empty:
-                st.info("대표 코멘트를 제외하면 동일 감성의 유사 댓글이 없습니다.")
-            else:
-                with st.expander(f"유사 댓글 보기 (대표 제외 잔여 {len(similar_comments):,}건)"):
-                    preview_rows = similar_comments.head(5)
-                    for _, sample in preview_rows.iterrows():
+            if not similar_comments.empty:
+                with st.expander(f"유사 댓글 {len(similar_comments):,}건"):
+                    for _, sample in similar_comments.head(5).iterrows():
                         st.markdown(f"- {_safe_text(sample.get('원문', ''))}")
-                        st.caption(f"좋아요 {sample.get('좋아요 수', 0)} · PII {sample.get('PII', '없음')} · {_safe_text(sample.get('작성일시', ''))}")
-
+                    if len(similar_comments) > 5:
+                        st.caption(f"외 {len(similar_comments) - 5:,}건 더...")
                     csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                     st.download_button(
-                        label="유사 댓글 CSV 다운로드 (대표 제외 전체)",
+                        label="CSV 다운로드",
                         data=csv_bytes,
-                        file_name=f"similar_comments_{key_prefix}_{idx+1}.csv",
+                        file_name=f"similar_{key_prefix}_{idx+1}.csv",
                         mime="text/csv",
-                        key=f"similar_download_{key_prefix}_{idx}_{abs(hash(csv_bytes))}",
-                        use_container_width=True,
+                        key=f"similar_download_{key_prefix}_{idx}",
                     )
 
 
@@ -1879,6 +2115,13 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
         videos["\ubd80\uc815 \ube44\uc728"] = 0.0
         return videos
 
+    if "sentiment_label" not in comments.columns:
+        comments["sentiment_label"] = "neutral"
+    if "comment_validity" not in comments.columns:
+        comments["comment_validity"] = "valid"
+    if "like_count" not in comments.columns:
+        comments["like_count"] = 0
+
     comment_stats = comments.groupby("video_id", dropna=False).agg(
         분석_전체_댓글_수=("video_id", "size"),
         긍정_댓글_수=("sentiment_label", lambda s: int((s == "positive").sum())),
@@ -1887,14 +2130,16 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
         제외_댓글_수=("comment_validity", lambda s: int((s == "excluded").sum())),
     ).reset_index()
 
-
-    negative_reason = (
-        comments[comments["sentiment_label"] == "negative"]
-        .sort_values(["video_id", "like_count"], ascending=[True, False])
-        .groupby("video_id", as_index=False)["classification_reason"]
-        .first()
-        .rename(columns={"classification_reason": "\uc8fc\uc694 \ubd80\uc815 \ud3ec\uc778\ud2b8"})
-    )
+    negative_reason = pd.DataFrame(columns=["video_id", "\uc8fc\uc694 \ubd80\uc815 \ud3ec\uc778\ud2b8"])
+    if "classification_reason" in comments.columns:
+        neg_comments = comments[comments["sentiment_label"] == "negative"]
+        if not neg_comments.empty:
+            negative_reason = (
+                neg_comments.sort_values(["video_id", "like_count"], ascending=[True, False])
+                .groupby("video_id", as_index=False)["classification_reason"]
+                .first()
+                .rename(columns={"classification_reason": "\uc8fc\uc694 \ubd80\uc815 \ud3ec\uc778\ud2b8"})
+            )
 
     summary = videos.merge(comment_stats, on="video_id", how="left").merge(negative_reason, on="video_id", how="left")
 
@@ -2005,6 +2250,8 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
             meta[COL_VIDEO_TITLE] = meta.get("title", meta.get(COL_VIDEO_TITLE, pd.Series("", index=meta.index))).map(_localized_video_title)
             meta[COL_VIDEO_LINK] = meta.get("video_url", meta.get(COL_VIDEO_LINK, pd.Series("", index=meta.index)))
 
+            if "product" not in meta.columns:
+                meta["product"] = ""
             density_display = density_core.merge(
                 meta[["video_id", "product", COL_COUNTRY, COL_VIDEO_TITLE, COL_VIDEO_LINK]],
                 on="video_id",
@@ -2037,7 +2284,11 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         return
 
     selected_video_id = checked.iloc[0]["video_id"]
-    selected_row = summary[summary["video_id"] == selected_video_id].iloc[0]
+    matched_rows = summary[summary["video_id"] == selected_video_id]
+    if matched_rows.empty:
+        st.warning("선택한 영상의 요약 데이터를 찾을 수 없습니다.")
+        return
+    selected_row = matched_rows.iloc[0]
     render_video_detail_page(analysis_comments, selected_row)  # ✅ 상세는 valid 풀로만
 
 
@@ -2049,8 +2300,8 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
     st.markdown("### 선택 영상 상세 분석")
     st.markdown(f"#### {selected_video.get(COL_VIDEO_TITLE, '-')}")
     st.caption(
-        f"제품군: {selected_video.get('product', '-')} ? {COL_COUNTRY}: {selected_video.get(COL_COUNTRY, '-')} ? "
-        f"발행일: {selected_video.get('발행일', '-')} ? 조회수: {int(selected_video.get('view_count', 0) or 0):,}"
+        f"제품군: {selected_video.get('product', '-')} · {COL_COUNTRY}: {selected_video.get(COL_COUNTRY, '-')} · "
+        f"발행일: {selected_video.get('발행일', '-')} · 조회수: {int(selected_video.get('view_count', 0) or 0):,}"
     )
     st.markdown(f"영상 링크: [{selected_video.get(COL_VIDEO_LINK, '-')}]({selected_video.get(COL_VIDEO_LINK, '#')})")
 
@@ -2061,10 +2312,11 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
     validity = video_comments["comment_validity"] if "comment_validity" in video_comments.columns else pd.Series("valid", index=video_comments.index)
     valid_comments = video_comments[validity.eq("valid")].copy()
     excluded_comments = video_comments[validity.eq("excluded")].copy()
+    sentiment_col = valid_comments.get("sentiment_label", pd.Series("neutral", index=valid_comments.index))
 
-    positive_count = int((valid_comments["sentiment_label"] == "positive").sum()) if not valid_comments.empty else 0
-    negative_count = int((valid_comments["sentiment_label"] == "negative").sum()) if not valid_comments.empty else 0
-    neutral_count = int((valid_comments["sentiment_label"] == "neutral").sum()) if not valid_comments.empty else 0
+    positive_count = int((sentiment_col == "positive").sum()) if not valid_comments.empty else 0
+    negative_count = int((sentiment_col == "negative").sum()) if not valid_comments.empty else 0
+    neutral_count = int((sentiment_col == "neutral").sum()) if not valid_comments.empty else 0
     excluded_count = len(excluded_comments)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -2098,6 +2350,7 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
             filtered_comments=video_comments,
             representative_bundles=None,
             opinion_units=None,
+            key_suffix=f"_vid_{video_id}",
         )
 
     with st.container(border=True):
@@ -2116,8 +2369,9 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
         display["분류 유형"] = display.get("classification_type", pd.Series("", index=display.index)).fillna("")
         display["신뢰도"] = display.get("confidence_level", pd.Series("", index=display.index)).fillna("")
         display["제품 타깃"] = display.get("product_target", pd.Series("", index=display.index)).fillna("")
+        display["인사이트 유형"] = display.get("insight_type", pd.Series("", index=display.index)).fillna("")
         display[COL_SENTIMENT] = display.get(COL_SENTIMENT, display.get("sentiment_label", pd.Series("", index=display.index))).fillna("")
-        cols = [COL_SENTIMENT, "제품 타깃", "분류 유형", "신뢰도", COL_ORIGINAL, COL_TRANSLATION, COL_CONTEXT, "분류 이유", "맥락 필요", COL_LIKES]
+        cols = [COL_SENTIMENT, "제품 타깃", "인사이트 유형", "분류 유형", "신뢰도", COL_ORIGINAL, COL_TRANSLATION, COL_CONTEXT, "분류 이유", "맥락 필요", COL_LIKES]
         existing = [c for c in cols if c in display.columns]
         st.dataframe(display[existing], use_container_width=True, hide_index=True)
 
@@ -2133,16 +2387,30 @@ def get_mode() -> str:
 def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> dict[str, list[str]]:
     comment_products = comments_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
     video_products = videos_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
-    available_products = [item for item in PRODUCT_ORDER if item in comment_products or item in video_products]
-    if not available_products:
-        available_products = [item for item in PRODUCT_ORDER if item in comment_products]
+    all_data_products = sorted(set(comment_products + video_products))
+    available_products = [item for item in PRODUCT_ORDER if item in all_data_products]
+    extra_from_data = [p for p in all_data_products if p and p not in PRODUCT_ORDER]
+    available_products.extend(extra_from_data)
     if not available_products:
         available_products = PRIMARY_PRODUCT_FILTERS[: min(4, len(PRIMARY_PRODUCT_FILTERS))]
 
+    full_product_list = PRODUCT_ORDER + [p for p in extra_from_data if p not in PRODUCT_ORDER]
+
+    # Build brand options: configured list + any brands in data not already listed
+    brand_options = BRAND_FILTER_OPTIONS[:]
+    data_brands = set()
+    if COL_BRAND in comments_df.columns:
+        data_brands = set(comments_df[COL_BRAND].dropna().astype(str).unique())
+    elif "brand_label" in comments_df.columns:
+        data_brands = {canonicalize_brand(b) for b in comments_df["brand_label"].dropna().unique()}
+    for b in sorted(data_brands):
+        if b and b not in brand_options:
+            brand_options.append(b)
+
     return {
-        "products": PRODUCT_ORDER,
+        "products": full_product_list,
         "available_products": available_products,
-        "regions": [localize_region(code) for code in REGION_CODES],
+        "regions": [localize_region(code) for code in REGION_CODES] + [REGION_OTHER_LABEL],
         "sentiments": [
             localize_sentiment("positive"),
             localize_sentiment("negative"),
@@ -2150,12 +2418,25 @@ def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame)
             localize_sentiment("excluded"),
         ],
         "cej": CEJ_ORDER[:],
-        "brands": BRAND_FILTER_OPTIONS[:],
+        "brands": brand_options,
         "analysis_scope": ["전체", "문의 포함 댓글만", "문의 제외"],
     }
 
 
-def _render_sidebar_filters(options: dict[str, list[str]]) -> tuple[dict[str, Any], int, int]:
+def _render_filter_toggle(label: str, pill_key: str, all_options: list[str]) -> None:
+    """Render 전체 선택 / 전체 해제 toggle buttons for a pill filter."""
+    col_all, col_clear = st.columns(2)
+    with col_all:
+        if st.button("전체 선택", key=f"{pill_key}_all", use_container_width=True, type="secondary"):
+            st.session_state[pill_key] = list(all_options)
+            st.rerun()
+    with col_clear:
+        if st.button("전체 해제", key=f"{pill_key}_clear", use_container_width=True, type="secondary"):
+            st.session_state[pill_key] = []
+            st.rerun()
+
+
+def _render_sidebar_filters(options: dict[str, list[str]]) -> dict[str, Any]:
     filter_product_defaults = _normalize_pill_state("filter_products", options["products"], options["available_products"])
     filter_region_defaults = _normalize_pill_state("filter_regions", options["regions"], options["regions"])
     filter_brand_defaults = _normalize_pill_state("filter_brands", options["brands"], options["brands"])
@@ -2163,105 +2444,107 @@ def _render_sidebar_filters(options: dict[str, list[str]]) -> tuple[dict[str, An
     filter_cej_defaults = _normalize_pill_state("filter_cej", options["cej"], options["cej"])
 
     with st.sidebar:
-        st.markdown("### \uD0D0\uC0C9 \uD544\uD130")
+        st.markdown("### 탐색 필터")
+        if st.button("필터 초기화 (전체 데이터 보기)", use_container_width=True, type="secondary"):
+            st.session_state["filter_products"] = list(options["products"])
+            st.session_state["filter_regions"] = list(options["regions"])
+            st.session_state["filter_brands"] = list(options["brands"])
+            st.session_state["filter_sentiments"] = list(options["sentiments"])
+            st.session_state["filter_cej"] = list(options["cej"])
+            st.rerun()
 
         with st.container(border=True):
-            st.caption("\uC81C\uD488 \uBC94\uC704")
-            st.caption(f"\uD604\uC7AC \uBD84\uC11D \uB370\uC774\uD130\uAC00 \uC788\uB294 \uC81C\uD488\uAD70: {', '.join(options['available_products'])}")
+            st.caption("제품 범위")
+            st.caption(f"데이터 보유 제품군: {', '.join(options['available_products'])}")
+            _render_filter_toggle("제품", "filter_products", options["products"])
             selected_products = st.pills(
-                "\uC81C\uD488\uAD70",
+                "제품군",
                 options["products"],
                 selection_mode="multi",
                 key="filter_products",
                 label_visibility="collapsed",
                 width="content",
-            ) or filter_product_defaults
+            )
 
         with st.container(border=True):
-            st.caption("\uC2DC\uC7A5")
+            st.caption("시장")
+            _render_filter_toggle("시장", "filter_regions", options["regions"])
             selected_regions = st.pills(
-                "\uAD6D\uAC00",
+                "국가",
                 options["regions"],
                 selection_mode="multi",
                 key="filter_regions",
                 label_visibility="collapsed",
                 width="content",
-            ) or filter_region_defaults
+            )
 
         with st.container(border=True):
-            st.caption("\uBE0C\uB79C\uB4DC")
+            st.caption("브랜드")
+            _render_filter_toggle("브랜드", "filter_brands", options["brands"])
             selected_brands = st.pills(
-                "\uBE0C\uB79C\uB4DC",
+                "브랜드",
                 options["brands"],
                 selection_mode="multi",
                 key="filter_brands",
                 label_visibility="collapsed",
                 width="content",
-            ) or filter_brand_defaults
+            )
 
         with st.container(border=True):
-            st.caption("\uAC10\uC131 \uB77C\uBCA8")
+            st.caption("감성 라벨")
+            _render_filter_toggle("감성", "filter_sentiments", options["sentiments"])
             selected_sentiments = st.pills(
-                "\uAC10\uC131",
+                "감성",
                 options["sentiments"],
                 selection_mode="multi",
                 key="filter_sentiments",
                 label_visibility="collapsed",
                 width="content",
-            ) or filter_sentiment_defaults
+            )
 
         with st.container(border=True):
-            st.caption("\uACE0\uAC1D\uACBD\uD5D8\uC5EC\uC815")
+            st.caption("고객경험여정")
+            _render_filter_toggle("CEJ", "filter_cej", options["cej"])
             selected_cej = st.pills(
-                "\uACE0\uAC1D\uACBD\uD5D8\uC5EC\uC815 \uB2E8\uACC4",
+                "고객경험여정 단계",
                 options["cej"],
                 selection_mode="multi",
                 key="filter_cej",
                 label_visibility="collapsed",
                 width="content",
-            ) or filter_cej_defaults
+            )
 
         with st.container(border=True):
-            st.caption("\uBD84\uC11D \uC720\uD615")
+            st.caption("분석 유형")
             analysis_scope = st.radio(
-                "\uBD84\uC11D \uC720\uD615",
+                "분석 유형",
                 options["analysis_scope"],
                 index=0,
                 label_visibility="collapsed",
             )
 
         with st.container(border=True):
-            st.caption("\uACE0\uAE09 \uC635\uC158")
+            st.caption("고급 옵션")
             keyword_query = st.text_input(
-                "\uB313\uAE00 \uB0B4 \uD0A4\uC6CC\uB4DC \uAC80\uC0C9",
+                "댓글 내 키워드 검색",
                 "",
-                placeholder="\uC608: \uC18C\uC74C, \uB0C9\uAC01, warranty",
+                placeholder="예: 소음, 냉각, warranty",
             )
 
-        weeks_per_view = st.slider(
-            "\uCC28\uD2B8 \uD55C \uD654\uBA74 \uC8FC\uCC28 \uC218",
-            min_value=WEEKLY_CHART_MIN,
-            max_value=WEEKLY_CHART_MAX,
-            value=WEEKLY_CHART_DEFAULT,
-            step=WEEKLY_CHART_STEP,
-        )
-        page = st.number_input(
-            "\uC8FC\uCC28 \uD398\uC774\uC9C0",
-            min_value=1,
-            value=1,
-            step=1,
-        )
+    # When all options are selected, treat as "no filter" (empty list)
+    def _effective(selected: list, all_opts: list) -> list:
+        return [] if set(selected) >= set(all_opts) else list(selected)
 
     filters = {
-        "products": selected_products,
-        "regions": selected_regions,
-        "sentiments": selected_sentiments,
-        "cej": selected_cej,
-        "brands": selected_brands,
+        "products": _effective(selected_products, options["products"]),
+        "regions": _effective(selected_regions, options["regions"]),
+        "sentiments": _effective(selected_sentiments, options["sentiments"]),
+        "cej": _effective(selected_cej, options["cej"]),
+        "brands": _effective(selected_brands, options["brands"]),
         "keyword_query": keyword_query,
         "analysis_scope": analysis_scope,
     }
-    return filters, int(weeks_per_view), int(page)
+    return filters
 
 
 def render_comments_lite(comments_df: pd.DataFrame) -> None:
@@ -2326,6 +2609,110 @@ def get_dashboard_data_resource_lite_comments():
     return load_dashboard_data_lite_comments()
 
 
+def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.DataFrame) -> None:
+    """Render NLP Analyzer insight panels on the dashboard."""
+    topic_insights = data.get("nlp_topic_insights", pd.DataFrame())
+    keyword_insights = data.get("nlp_keyword_insights", pd.DataFrame())
+    product_mentions = data.get("nlp_product_mentions", pd.DataFrame())
+    sentiment_dist = data.get("nlp_sentiment_distribution", pd.DataFrame())
+
+    has_any = not topic_insights.empty or not keyword_insights.empty or not product_mentions.empty
+    if not has_any:
+        if "nlp_label" not in filtered_comments.columns or filtered_comments["nlp_label"].isna().all():
+            return
+
+    st.markdown("### NLP 심층 분석 인사이트")
+    st.caption("nlp_analyzer(LLM 기반)로 추출한 토픽, 키워드, 제품 언급, 문의 패턴을 요약합니다.")
+
+    # NLP sentiment distribution - KPI row
+    if not sentiment_dist.empty:
+        accent_map = {"positive": "green", "negative": "orange", "neutral": "purple", "trash": "", "undecidable": ""}
+        label_map = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸", "undecidable": "판단불가"}
+        dist_rows = list(sentiment_dist.head(5).iterrows())
+        cols = st.columns(len(dist_rows))
+        for i, (_, row) in enumerate(dist_rows):
+            with cols[i]:
+                label_kr = label_map.get(row["label"], row["label"])
+                accent = accent_map.get(row["label"], "blue")
+                render_card(
+                    f"NLP {label_kr}",
+                    f'{int(row["count"]):,}',
+                    delta=f"{row['share']:.0%}",
+                    delta_direction="positive" if row["label"] == "positive" else ("negative" if row["label"] == "negative" else None),
+                    accent=accent,
+                )
+
+    # Topic + Keyword side by side
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        if not topic_insights.empty:
+            with st.container(border=True):
+                st.markdown("#### 토픽별 감성 분포")
+                st.caption("LLM이 식별한 주요 토픽과 해당 토픽 내 긍정/부정/중립 분포입니다.")
+                display_topics = topic_insights.head(10).copy()
+                display_topics = display_topics.rename(columns={
+                    "topic": "토픽", "positive_count": "긍정", "negative_count": "부정",
+                    "neutral_count": "중립", "total": "합계", "dominant_sentiment": "주요 감성",
+                    "negative_rate": "부정 비율",
+                })
+                sentiment_kr = {"positive": "긍정", "negative": "부정", "neutral": "중립"}
+                if "주요 감성" in display_topics.columns:
+                    display_topics["주요 감성"] = display_topics["주요 감성"].map(lambda x: sentiment_kr.get(x, x))
+                st.dataframe(display_topics, use_container_width=True, hide_index=True)
+
+    with col_right:
+        if not keyword_insights.empty:
+            with st.container(border=True):
+                st.markdown("#### NLP 키워드 분석")
+                st.caption("LLM이 추출한 핵심 키워드의 빈도 및 감성 분포입니다.")
+                display_kw = keyword_insights.head(10).copy()
+                display_kw = display_kw.rename(columns={
+                    "keyword": "키워드", "count": "빈도", "positive_count": "긍정",
+                    "negative_count": "부정", "neutral_count": "중립", "dominant_sentiment": "주요 감성",
+                })
+                sentiment_kr = {"positive": "긍정", "negative": "부정", "neutral": "중립"}
+                if "주요 감성" in display_kw.columns:
+                    display_kw["주요 감성"] = display_kw["주요 감성"].map(lambda x: sentiment_kr.get(x, x))
+                st.dataframe(display_kw, use_container_width=True, hide_index=True)
+
+    # Product mentions + Negative summaries side by side
+    col_prod, col_neg = st.columns(2)
+
+    with col_prod:
+        if not product_mentions.empty:
+            with st.container(border=True):
+                st.markdown("#### 제품 언급 분석")
+                st.caption("LLM이 감지한 제품 언급과 해당 감성 분포입니다.")
+                display_prod = product_mentions.head(8).copy()
+                display_prod = display_prod.rename(columns={
+                    "product": "제품", "mention_count": "언급 수", "positive_count": "긍정",
+                    "negative_count": "부정", "neutral_count": "중립", "negative_rate": "부정 비율",
+                })
+                st.dataframe(display_prod, use_container_width=True, hide_index=True)
+
+    with col_neg:
+        if "nlp_summary" in filtered_comments.columns:
+            summaries = filtered_comments[filtered_comments["nlp_summary"].notna() & filtered_comments["nlp_summary"].ne("")].copy()
+            if not summaries.empty and "nlp_label" in summaries.columns:
+                neg_summaries = summaries[summaries["nlp_label"] == "negative"].sort_values(
+                    "nlp_confidence", ascending=False
+                ).head(5)
+                if not neg_summaries.empty:
+                    with st.container(border=True):
+                        st.markdown("#### 주요 부정 의견 요약")
+                        for _, row in neg_summaries.iterrows():
+                            conf = row.get("nlp_confidence", 0)
+                            topics_list = row.get("nlp_topics", [])
+                            topics_str = ", ".join(topics_list) if isinstance(topics_list, list) and topics_list else ""
+                            badge_html = f'<span class="nlp-badge negative">{conf:.0%}</span>' if conf else ""
+                            topic_html = f' <span style="color:#64748b; font-size:12px;">({topics_str})</span>' if topics_str else ""
+                            st.markdown(
+                                f'{badge_html} {row["nlp_summary"]}{topic_html}',
+                                unsafe_allow_html=True,
+                            )
+
+
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
@@ -2352,11 +2739,16 @@ def main() -> None:
     videos_df[COL_COUNTRY] = videos_df.get("region", pd.Series(dtype=str)).map(localize_region)
     dashboard_options = _build_dashboard_options(comments_df, videos_df)
 
-    st.markdown("## 가전 VoC Dashboard")
+    st.markdown(
+        '<div style="display:flex; align-items:center; gap:14px; margin-bottom:4px;">'
+        '<div style="font-size:28px; font-weight:800; color:#1e293b; letter-spacing:-0.02em;">가전 VoC Dashboard</div>'
+        f'<span style="display:inline-block; padding:3px 10px; border-radius:999px; background:#eff6ff; color:#3b82f6; font-size:11px; font-weight:700; letter-spacing:0.03em;">{DASHBOARD_BUILD_LABEL}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
-    st.caption(f"Config: {CACHE_SCHEMA_VERSION} / {DASHBOARD_BUILD_LABEL}")
 
-    selected_filters, weeks_per_view, page = _render_sidebar_filters(dashboard_options)
+    selected_filters = _render_sidebar_filters(dashboard_options)
 
     bundle = compute_filtered_bundle(
         comments_df,
@@ -2371,10 +2763,8 @@ def main() -> None:
     all_comments = bundle.get("all_comments", filtered_comments)
     filtered_videos = bundle["videos"]
 
-    all_filtered_weeks = sorted(filtered_comments[COL_WEEK_START].dropna().unique())
-    total_pages = max(1, (len(all_filtered_weeks) + weeks_per_view - 1) // weeks_per_view) if all_filtered_weeks else 1
-    weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
-    page = min(max(int(page), 1), int(total_pages))
+    # Default weekly window for download (chart controls override inline later)
+    weekly_window, _ = build_weekly_sentiment_window(filtered_comments, WEEKLY_CHART_DEFAULT, 1)
 
     cej_df = data.get("cej_negative_rate", pd.DataFrame()).copy()
     if not cej_df.empty:
@@ -2407,11 +2797,11 @@ def main() -> None:
         st.warning("현재 선택한 필터에 맞는 댓글이 없습니다. 필터를 넓히거나 문의/감성 범위를 다시 선택해 주세요.")
         st.caption("선택 결과를 다른 데이터로 대체하지 않고, 실제 0건 상태를 그대로 보여줍니다.")
         st.dataframe(pd.DataFrame([{
-            "제품": format_selection_summary(selected_filters["products"]),
-            "국가": format_selection_summary(selected_filters["regions"]),
-            "브랜드": format_selection_summary(selected_filters["brands"]),
-            "감성": format_selection_summary(selected_filters["sentiments"]),
-            "CEJ": format_selection_summary(selected_filters["cej"]),
+            "제품": format_selection(selected_filters["products"]),
+            "국가": format_selection(selected_filters["regions"]),
+            "브랜드": format_selection(selected_filters["brands"]),
+            "감성": format_selection(selected_filters["sentiments"]),
+            "CEJ": format_selection(selected_filters["cej"]),
             "분석 유형": selected_filters.get("analysis_scope", "전체"),
             "키워드": selected_filters["keyword_query"] or "-",
         }]), hide_index=True, use_container_width=True)
@@ -2506,69 +2896,91 @@ def main() -> None:
         st.caption("먼저 핵심 요약을 확인한 뒤, 아래 차트와 대표 코멘트에서 어떤 이슈가 실제로 반복되는지 내려가며 읽을 수 있습니다.")
         row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
         with row1_col1:
-            render_card("분석 대상 댓글", f"{len(filtered_comments):,}")
+            render_card("분석 대상 댓글", f"{len(filtered_comments):,}", accent="blue")
         with row1_col2:
-            render_card("유효 댓글 수", f"{bundle['meaningful_count']:,}")
+            render_card("유효 댓글 수", f"{bundle['meaningful_count']:,}", accent="blue",
+                        subtitle=f"전체의 {bundle['meaningful_count'] / max(len(filtered_comments), 1) * 100:.0f}%")
         with row1_col3:
-            render_card("문의 댓글 수", f"{bundle.get('inquiry_count', 0):,}")
+            render_card("문의 댓글 수", f"{bundle.get('inquiry_count', 0):,}", accent="purple")
         with row1_col4:
-            render_card("제외 댓글 수", f"{bundle['removed_count']:,}")
+            render_card("제외 댓글 수", f"{bundle['removed_count']:,}", accent="orange")
 
         row2_col1, row2_col2, row2_col3 = st.columns(3)
         with row2_col1:
-            render_card("긍정 비율", f"{positive_ratio:.1f}%")
+            render_card("긍정 비율", f"{positive_ratio:.1f}%", accent="green")
         with row2_col2:
-            render_card("부정 비율", f"{negative_ratio:.1f}%")
+            render_card("부정 비율", f"{negative_ratio:.1f}%", accent="orange")
         with row2_col3:
-            render_card("중립 비율", f"{neutral_ratio:.1f}%")
+            render_card("중립 비율", f"{neutral_ratio:.1f}%", accent="purple")
 
         with st.expander("분석 운영 지표 보기"):
             st.caption("아래 지표는 데이터 가공 상태와 KPI 계산 범위를 점검하기 위한 운영용 보조 지표입니다.")
             row3_col1, row3_col2, row3_col3, row3_col4, row3_col5 = st.columns(5)
             with row3_col1:
-                render_card("원천 콘텐츠 수", f"{int(monitoring_row.get('source_count', 0) or 0):,}")
+                render_card("원천 콘텐츠 수", f"{int(monitoring_row.get('source_count', 0) or 0):,}", accent="blue")
             with row3_col2:
-                render_card("의견 단위 수", f"{int(monitoring_row.get('opinion_count', 0) or 0):,}")
+                render_card("의견 단위 수", f"{int(monitoring_row.get('opinion_count', 0) or 0):,}", accent="blue")
             with row3_col3:
-                render_card("분리 비율", f"{float(monitoring_row.get('split_rate', 0) or 0):.1%}")
+                render_card("분리 비율", f"{float(monitoring_row.get('split_rate', 0) or 0):.1%}", accent="purple")
             with row3_col4:
-                render_card("중립 비율", f"{float(monitoring_row.get('neutral_rate', 0) or 0):.1%}")
+                render_card("중립 비율", f"{float(monitoring_row.get('neutral_rate', 0) or 0):.1%}", accent="purple")
             with row3_col5:
-                render_card("제외 비율", f"{float(monitoring_row.get('exclude_rate', 0) or 0):.1%}")
+                render_card("제외 비율", f"{float(monitoring_row.get('exclude_rate', 0) or 0):.1%}", accent="orange")
 
             row4_col1, row4_col2, row4_col3 = st.columns(3)
             with row4_col1:
-                render_card("KPI 의견 수", f"{int(reporting_row.get('kpi_opinion_count', 0) or 0):,}")
+                render_card("KPI 의견 수", f"{int(reporting_row.get('kpi_opinion_count', 0) or 0):,}", accent="blue")
             with row4_col2:
-                render_card("KPI 긍정 비율", f"{float(reporting_row.get('positive_share', 0) or 0):.1%}")
+                render_card("KPI 긍정 비율", f"{float(reporting_row.get('positive_share', 0) or 0):.1%}", accent="green")
             with row4_col3:
-                render_card("KPI 부정 비율", f"{float(reporting_row.get('negative_share', 0) or 0):.1%}")
+                render_card("KPI 부정 비율", f"{float(reporting_row.get('negative_share', 0) or 0):.1%}", accent="orange")
 
 
         with st.container(border=True):
             st.markdown("### 주차별 긍정/부정 응답률")
+            chart_ctrl_col1, chart_ctrl_col2, chart_ctrl_spacer = st.columns([1, 1, 3])
+            with chart_ctrl_col1:
+                weeks_per_view = st.slider(
+                    "표시 주차 수",
+                    min_value=WEEKLY_CHART_MIN,
+                    max_value=WEEKLY_CHART_MAX,
+                    value=WEEKLY_CHART_DEFAULT,
+                    step=WEEKLY_CHART_STEP,
+                )
+            with chart_ctrl_col2:
+                page = st.number_input("주차 페이지", min_value=1, value=1, step=1)
+            del chart_ctrl_spacer
+            weekly_window, total_pages = build_weekly_sentiment_window(filtered_comments, weeks_per_view, page)
+            page = min(max(int(page), 1), int(total_pages))
             if not weekly_window.empty and float(weekly_window["댓글수"].sum()) > 0:
                 week_order = weekly_window[[COL_WEEK_LABEL, "주차축약"]].drop_duplicates().sort_values(COL_WEEK_LABEL)
                 axis_order = week_order["주차축약"].tolist()
                 bar_size = max(8, min(16, int(180 / max(len(axis_order), 1))))
-                chart = alt.Chart(weekly_window).mark_bar(size=bar_size, cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                chart = alt.Chart(weekly_window).mark_bar(size=bar_size, cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
                     x=alt.X(
                         "주차축약:N",
                         title="주차 시작일",
                         sort=axis_order,
-                        axis=alt.Axis(labelAngle=-35, labelLimit=56, labelPadding=10, titlePadding=16),
+                        axis=alt.Axis(
+                            labelAngle=-35, labelLimit=56, labelPadding=10, titlePadding=16,
+                            labelColor="#64748b", titleColor="#475569", gridColor="#f1f5f9",
+                        ),
                     ),
-                    y=alt.Y("비율:Q", title="응답률", axis=alt.Axis(format="%")),
+                    y=alt.Y(
+                        "비율:Q", title="응답률",
+                        axis=alt.Axis(format="%", labelColor="#64748b", titleColor="#475569", gridColor="#f1f5f9"),
+                    ),
                     xOffset=alt.XOffset(f"{COL_SENTIMENT_CODE}:N", sort=["positive", "negative"]),
                     color=alt.Color(
                         f"{COL_SENTIMENT_CODE}:N",
-                        scale=alt.Scale(domain=["positive", "negative"], range=["#4D79F6", "#FFAA3B"]),
+                        scale=alt.Scale(domain=["positive", "negative"], range=["#3b82f6", "#f97316"]),
                         legend=alt.Legend(
                             title=None,
                             orient="top",
                             direction="horizontal",
                             symbolType="square",
                             labelExpr="datum.label === 'positive' ? '긍정' : datum.label === 'negative' ? '부정' : datum.label",
+                            labelColor="#475569",
                         ),
                     ),
                     tooltip=[
@@ -2577,7 +2989,7 @@ def main() -> None:
                         alt.Tooltip("댓글수:Q", title="댓글 수"),
                         alt.Tooltip("비율:Q", title="응답률", format=".1%"),
                     ],
-                ).properties(height=320)
+                ).properties(height=340).configure_view(strokeWidth=0)
                 st.altair_chart(chart, use_container_width=True)
                 st.caption(f"시간순으로 정렬된 최근 {len(axis_order)}개 주차를 표시합니다. 전체 {total_pages}페이지 중 {min(page, total_pages)}페이지입니다.")
             else:
@@ -2588,6 +3000,26 @@ def main() -> None:
 
         with st.container(border=True):
             render_keyword_panel(filtered_comments, "positive", "긍정 키워드 비중")
+
+        with st.container(border=True):
+            render_nlp_insights(data, filtered_comments)
+
+        # Insight type distribution (video_context 기반)
+        if "insight_type" in filtered_comments.columns:
+            insight_counts = filtered_comments["insight_type"].dropna().value_counts()
+            insight_counts = insight_counts[insight_counts.index != "일반_의견"]
+            if not insight_counts.empty:
+                with st.container(border=True):
+                    st.markdown("### 인사이트 유형 분포")
+                    st.caption("영상 맥락(프로모션/리뷰/비교 등)과 댓글 내용을 결합하여 비즈니스 인사이트 유형을 자동 분류합니다.")
+                    insight_df = insight_counts.reset_index()
+                    insight_df.columns = ["인사이트 유형", "건수"]
+                    chart = alt.Chart(insight_df).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5, color="#7c3aed").encode(
+                        x=alt.X("건수:Q", title="건수"),
+                        y=alt.Y("인사이트 유형:N", sort="-x", title=""),
+                        tooltip=["인사이트 유형", "건수"],
+                    ).properties(height=max(120, len(insight_counts) * 32))
+                    st.altair_chart(chart, use_container_width=True)
 
         with st.container(border=True):
             st.markdown("### CEJ 단계별 고객 신뢰도")
