@@ -1341,7 +1341,7 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     brands_active = bool(filters.get("brands_active", bool(brands)))
     keyword_query = str(filters.get("keyword_query") or "").strip()
     analysis_scope = str(filters.get("analysis_scope") or "전체").strip() or "전체"
-    relevance_scope = str(filters.get("relevance_scope") or "LG 관련만").strip() or "LG 관련만"
+    relevance_scope = str(filters.get("relevance_scope") or "전체 수집").strip() or "전체 수집"
 
     opinion_units = (opinion_units_df.copy() if opinion_units_df is not None else pd.DataFrame())
     if not opinion_units.empty:
@@ -2909,7 +2909,7 @@ def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame)
         "cej": CEJ_ORDER[:],
         "brands": brand_options,
         "analysis_scope": ["전체", "문의 포함 댓글만", "문의 제외"],
-        "relevance_scope": ["LG 관련만", "전체 수집"],
+        "relevance_scope": ["전체 수집", "LG 관련만"],
     }
 
 
@@ -3340,7 +3340,7 @@ def main() -> None:
             "감성": format_selection(selected_filters["sentiments"], empty_label="선택 없음"),
             "CEJ": format_selection(selected_filters["cej"], empty_label="선택 없음"),
             "분석 유형": selected_filters.get("analysis_scope", "전체"),
-            "LG 관련성 범위": selected_filters.get("relevance_scope", "LG 관련만"),
+            "LG 관련성 범위": selected_filters.get("relevance_scope", "전체 수집"),
             "키워드": selected_filters["keyword_query"] or "-",
         }]), hide_index=True, width="stretch")
         return
