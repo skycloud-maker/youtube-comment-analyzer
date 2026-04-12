@@ -70,12 +70,14 @@ UI_NOISE_TERMS = {
     "사람", "분들", "여러분", "우리", "저도", "나도", "자기", "누구",
     # Non-specific terms
     "생각", "가지", "나오", "들어", "시작", "해보", "해야",
-    "리뷰", "광고", "모델",
+    "리뷰", "광고", "광고했", "광고했다", "광고했다고", "모델",
     # YouTuber/person names (not product keywords)
-    "잇섭", "잇섭님", "곽튜브", "곽튜브님",
+    "잇섭", "잇섭님", "곽튜브", "곽튜브님", "유튜버", "유튜브",
     # Non-actionable descriptors
     "확실히", "확실", "자주", "바로", "자가", "고려",
     "사용중", "구입", "구입했", "고장나서", "귀찮겠네요",
+    # User-reported noisy tokens
+    "샀는데", "샀다", "샀어요", "있는데", "없이", "없어서", "있는데요", "없는데",
 }
 
 # Brand/product terms that shouldn't be separate keywords (already in brand filter)
@@ -158,7 +160,7 @@ _NOISE_VERB_SUFFIXES = (
     "했는데", "했어요", "합니다", "하는데", "있어요", "없어요", "됩니다",
     "인데요", "거든요", "잖아요", "나요", "ㅂ니다", "습니다",
     "해서요", "인가요", "건가요", "인데", "네요", "더라고",
-    "더라구", "겠네요", "겠다", "었는데", "겠어요",
+    "더라구", "겠네요", "겠다", "었는데", "겠어요", "는데", "어서", "다고", "했고", "했다고", "지만",
 )
 
 # Korean particle/postposition suffixes — strip to get the root noun

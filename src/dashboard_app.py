@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 import codecs
 import hashlib
+import html
 import json
 import os
 import re
@@ -24,7 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from src.analytics.comment_analysis import analyze_comment_with_context
-from src.analytics.keywords import build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
+from src.analytics.keywords import BUSINESS_KEEPWORDS, build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
 from src.config import load_yaml_settings_optional
 from src.utils.translation import translate_to_korean
 
@@ -228,7 +229,12 @@ def get_dashboard_data_resource():
 
 
 @st.cache_data(show_spinner=False)
-def build_keyword_summary(texts: tuple[str, ...], top_n: int = 6, version: str = "v5") -> pd.DataFrame:
+def build_keyword_summary(
+    texts: tuple[str, ...],
+    top_n: int = 6,
+    version: str = "v5",
+    blocked_keywords: tuple[str, ...] = (),
+) -> pd.DataFrame:
     counter = build_keyword_counter(texts)
     rows = [{"keyword": keyword, "count": count} for keyword, count in filter_business_keywords(counter, top_n * 6)]
     keyword_df = pd.DataFrame(rows)
@@ -236,8 +242,30 @@ def build_keyword_summary(texts: tuple[str, ...], top_n: int = 6, version: str =
         return keyword_df
     keyword_df["keyword"] = keyword_df["keyword"].map(normalize_keyword)
     keyword_df = keyword_df[keyword_df["keyword"] != ""]
+    blocked = {item for item in blocked_keywords if item}
+    if blocked:
+        keyword_df = keyword_df[~keyword_df["keyword"].isin(blocked)]
     keyword_df = keyword_df.groupby("keyword", as_index=False)["count"].sum().sort_values("count", ascending=False).head(top_n)
     return keyword_df
+
+
+def _build_dynamic_keyword_excludes(comments_df: pd.DataFrame) -> tuple[str, ...]:
+    if comments_df.empty:
+        return ()
+
+    blocked: set[str] = set()
+    for col in ["channel_title", "author_display_name"]:
+        if col not in comments_df.columns:
+            continue
+        for text in comments_df[col].dropna().astype(str).head(500).tolist():
+            for raw_token in re.findall(r"[0-9A-Za-z가-힣]+", text):
+                token = normalize_keyword(raw_token)
+                if not token:
+                    continue
+                if token in BUSINESS_KEEPWORDS:
+                    continue
+                blocked.add(token)
+    return tuple(sorted(blocked))
 
 
 @st.cache_data(show_spinner=False)
@@ -579,6 +607,28 @@ def apply_theme() -> None:
         .nlp-badge.neutral {background: #e0e7ff; color: #3730a3;}
         .nlp-badge.trash {background: #f1f5f9; color: #475569;}
         .insight-badge {display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; background: #faf5ff; color: #7c3aed; border: 1px solid #ede9fe;}
+        .rep-ai-card {margin-top: 10px; background: linear-gradient(180deg, #071329 0%, #030b1b 100%); border: 1px solid #1e3a5f; border-radius: 14px; padding: 14px 14px 12px; color: #e2e8f0;}
+        .rep-ai-head {display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px;}
+        .rep-ai-pill {display: inline-flex; align-items: center; border: 1px solid #24466d; border-radius: 10px; padding: 4px 10px; font-size: 13px; font-weight: 800; letter-spacing: 0.01em;}
+        .rep-ai-pill.positive {color: #60a5fa; background: rgba(37,99,235,0.12);}
+        .rep-ai-pill.negative {color: #fb7185; background: rgba(190,24,93,0.12);}
+        .rep-ai-pill.neutral {color: #c4b5fd; background: rgba(124,58,237,0.14);}
+        .rep-ai-pill.trash {color: #94a3b8; background: rgba(100,116,139,0.15);}
+        .rep-ai-score {font-size: 30px; font-weight: 900; line-height: 1; color: #f8fafc;}
+        .rep-ai-progress-wrap {height: 8px; background: rgba(148,163,184,0.35); border-radius: 999px; margin: 4px 0 12px;}
+        .rep-ai-progress-fill {height: 100%; border-radius: 999px; background: linear-gradient(90deg, #60a5fa, #3b82f6);}
+        .rep-ai-flags {display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;}
+        .rep-ai-flag {font-size: 12px; font-weight: 700; color: #93c5fd; background: rgba(30,64,175,0.25); border: 1px solid rgba(96,165,250,0.35); border-radius: 8px; padding: 4px 8px;}
+        .rep-ai-sec {margin-top: 10px;}
+        .rep-ai-label {font-size: 12px; color: #93c5fd; font-weight: 800; letter-spacing: 0.02em; margin-bottom: 4px;}
+        .rep-ai-box {background: rgba(15,23,42,0.68); border: 1px solid rgba(148,163,184,0.25); border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.5; color: #f1f5f9;}
+        .rep-ai-topic {display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(15,23,42,0.68); border: 1px solid rgba(148,163,184,0.25); border-radius: 10px; padding: 8px 10px;}
+        .rep-ai-topic-title {font-size: 14px; font-weight: 700; color: #e2e8f0;}
+        .rep-ai-topic-sent {font-size: 12px; font-weight: 700; color: #93c5fd;}
+        .rep-ai-kws {display: flex; gap: 6px; flex-wrap: wrap;}
+        .rep-ai-kw {font-size: 12px; font-weight: 700; color: #cbd5e1; background: rgba(30,41,59,0.85); border: 1px solid rgba(148,163,184,0.35); border-radius: 999px; padding: 3px 8px;}
+        .rep-ai-insight {margin-top: 10px; border-left: 3px solid #38bdf8; background: rgba(14,116,144,0.12); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #e0f2fe;}
+        .rep-ai-action {margin-top: 8px; border-left: 3px solid #22c55e; background: rgba(22,101,52,0.16); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #dcfce7;}
 
         /* ===== Data Tables ===== */
         [data-testid="stDataFrame"] {border-radius: var(--radius-sm); overflow: hidden;}
@@ -626,6 +676,41 @@ PRODUCT_TARGET_KR_MAP = {
     "vacuum": "청소기",
     "styler": "스타일러",
 }
+
+
+PRODUCT_LABEL_ALIASES = {
+    "냉장고": "냉장고",
+    "세탁기": "세탁기",
+    "건조기": "건조기",
+    "식기세척기": "식기세척기",
+    "식세기": "식기세척기",
+    "청소기": "청소기",
+    "오븐": "오븐",
+    "정수기": "정수기",
+    "인덕션": "인덕션",
+    "와인셀러": "와인셀러",
+    "컵세척기": "컵세척기",
+    "실내식물재배기": "실내식물재배기(틔운)",
+    "틔운": "실내식물재배기(틔운)",
+}
+
+
+def canonicalize_product_label(value: Any) -> str:
+    raw = _safe_text(value)
+    if not raw:
+        return ""
+
+    normalized = re.sub(r"\s+", " ", raw).strip()
+    normalized = re.sub(r"(추천|리뷰|후기|비교|영상)\s*$", "", normalized).strip()
+    if not normalized:
+        return ""
+    if normalized in PRODUCT_ORDER:
+        return normalized
+
+    for marker, canonical in PRODUCT_LABEL_ALIASES.items():
+        if marker in normalized:
+            return canonical
+    return normalized
 
 
 def localize_product_target(value: str) -> str:
@@ -1067,9 +1152,11 @@ def add_localized_columns(comments_df: pd.DataFrame) -> pd.DataFrame:
     working[COL_SENTIMENT] = working[COL_SENTIMENT_CODE].map(localize_sentiment)
     working[COL_CEJ] = topic_series.map(canonicalize_cej)
     working[COL_BRAND] = brand_series.map(canonicalize_brand)
+    if "product" in working.columns:
+        working["product"] = working["product"].map(canonicalize_product_label)
     # Enrich product with sub-category from product_target when available
     if "product_target" in working.columns:
-        sub_product = working["product_target"].map(localize_product_target)
+        sub_product = working["product_target"].map(localize_product_target).map(canonicalize_product_label)
         has_sub = sub_product.fillna("").ne("")
         working.loc[has_sub, "product"] = sub_product[has_sub]
 
@@ -1133,25 +1220,37 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     if "text_display" not in base_comments.columns:
         base_comments["text_display"] = base_comments.get(COL_ORIGINAL, pd.Series("", index=base_comments.index)).fillna("")
 
-    products = filters.get("products") or []
-    regions = filters.get("regions") or []
-    sentiments = filters.get("sentiments") or []
-    cej = filters.get("cej") or []
-    brands = filters.get("brands") or []
+    products = list(filters.get("products") or [])
+    regions = list(filters.get("regions") or [])
+    sentiments = list(filters.get("sentiments") or [])
+    cej = list(filters.get("cej") or [])
+    brands = list(filters.get("brands") or [])
+    products_active = bool(filters.get("products_active", bool(products)))
+    regions_active = bool(filters.get("regions_active", bool(regions)))
+    sentiments_active = bool(filters.get("sentiments_active", bool(sentiments)))
+    cej_active = bool(filters.get("cej_active", bool(cej)))
+    brands_active = bool(filters.get("brands_active", bool(brands)))
     keyword_query = str(filters.get("keyword_query") or "").strip()
     analysis_scope = str(filters.get("analysis_scope") or "전체").strip() or "전체"
 
     opinion_units = (opinion_units_df.copy() if opinion_units_df is not None else pd.DataFrame())
     if not opinion_units.empty:
-        if products and "product" in opinion_units.columns:
+        if products_active and "product" in opinion_units.columns:
             opinion_units = opinion_units[opinion_units["product"].isin(products)]
-        if regions and "region" in opinion_units.columns:
-            opinion_units = opinion_units[opinion_units["region"].isin(region_codes_from_labels(regions))]
-        if cej and "cej_scene_code" in opinion_units.columns:
+        if regions_active and "region" in opinion_units.columns:
+            region_codes = region_codes_from_labels(regions)
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                opinion_units = opinion_units[
+                    opinion_units["region"].isin(explicit_codes) | ~opinion_units["region"].isin(REGION_CODES)
+                ]
+            else:
+                opinion_units = opinion_units[opinion_units["region"].isin(region_codes)]
+        if cej_active and "cej_scene_code" in opinion_units.columns:
             opinion_units = opinion_units[opinion_units["cej_scene_code"].map(canonicalize_cej).isin(cej)]
-        if sentiments and "sentiment" in opinion_units.columns:
+        if sentiments_active and "sentiment" in opinion_units.columns:
             opinion_units = opinion_units[opinion_units["sentiment"].astype(str).str.lower().map(localize_sentiment).isin(sentiments)]
-        if brands and "brand_mentioned" in opinion_units.columns:
+        if brands_active and "brand_mentioned" in opinion_units.columns:
             opinion_units["brand_mentioned"] = opinion_units["brand_mentioned"].map(canonicalize_brand)
             opinion_units = opinion_units[opinion_units["brand_mentioned"].isin(brands)]
 
@@ -1159,9 +1258,9 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     if not opinion_units.empty and "source_content_id" in opinion_units.columns and "inquiry_flag" in opinion_units.columns:
         inquiry_source_ids = set(opinion_units.loc[opinion_units["inquiry_flag"].fillna(False), "source_content_id"].astype(str))
 
-    if products:
+    if products_active:
         base_comments = base_comments[base_comments["product"].isin(products)]
-    if regions and COL_COUNTRY in base_comments.columns:
+    if regions_active and COL_COUNTRY in base_comments.columns:
         known_labels = set(REGION_LABELS.values())
         if REGION_OTHER_LABEL in regions:
             base_comments = base_comments[
@@ -1169,9 +1268,9 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
             ]
         else:
             base_comments = base_comments[base_comments[COL_COUNTRY].isin(regions)]
-    if cej and COL_CEJ in base_comments.columns:
+    if cej_active and COL_CEJ in base_comments.columns:
         base_comments = base_comments[base_comments[COL_CEJ].isin(cej)]
-    if brands and COL_BRAND in base_comments.columns:
+    if brands_active and COL_BRAND in base_comments.columns:
         base_comments = base_comments[base_comments[COL_BRAND].isin(brands)]
     if keyword_query:
         base_comments = base_comments[
@@ -1189,7 +1288,7 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     all_comments = base_comments.copy()
     
     filtered_comments = base_comments.copy()
-    if sentiments and COL_SENTIMENT in filtered_comments.columns:
+    if sentiments_active and COL_SENTIMENT in filtered_comments.columns:
         filtered_comments = filtered_comments[filtered_comments[COL_SENTIMENT].isin(sentiments)]
 
     representative_comments = base_comments.copy()
@@ -1198,11 +1297,18 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
 
     representative_bundles = (representative_bundles_df.copy() if representative_bundles_df is not None else pd.DataFrame())
     if not representative_bundles.empty:
-        if products and "product" in representative_bundles.columns:
+        if products_active and "product" in representative_bundles.columns:
             representative_bundles = representative_bundles[representative_bundles["product"].isin(products)]
-        if regions and "region" in representative_bundles.columns:
-            representative_bundles = representative_bundles[representative_bundles["region"].isin(region_codes_from_labels(regions))]
-        if brands and "brand_mentioned" in representative_bundles.columns:
+        if regions_active and "region" in representative_bundles.columns:
+            region_codes = region_codes_from_labels(regions)
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                representative_bundles = representative_bundles[
+                    representative_bundles["region"].isin(explicit_codes) | ~representative_bundles["region"].isin(REGION_CODES)
+                ]
+            else:
+                representative_bundles = representative_bundles[representative_bundles["region"].isin(region_codes)]
+        if brands_active and "brand_mentioned" in representative_bundles.columns:
             representative_bundles["brand_mentioned"] = representative_bundles["brand_mentioned"].map(canonicalize_brand)
             representative_bundles = representative_bundles[representative_bundles["brand_mentioned"].isin(brands)]
         if analysis_scope != "전체" and "top_source_content_id" in representative_bundles.columns:
@@ -1215,19 +1321,32 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     filtered_videos = videos_df.copy()
     if COL_COUNTRY not in filtered_videos.columns and "region" in filtered_videos.columns:
         filtered_videos[COL_COUNTRY] = filtered_videos["region"].map(localize_region)
-    if products and "product" in filtered_videos.columns:
+    if products_active and "product" in filtered_videos.columns:
         filtered_videos = filtered_videos[filtered_videos["product"].isin(products)]
-    if regions and COL_COUNTRY in filtered_videos.columns:
-        filtered_videos = filtered_videos[filtered_videos[COL_COUNTRY].isin(regions)]
-    if brands and COL_BRAND in filtered_videos.columns:
+    if regions_active and COL_COUNTRY in filtered_videos.columns:
+        known_labels = set(REGION_LABELS.values())
+        if REGION_OTHER_LABEL in regions:
+            filtered_videos = filtered_videos[
+                filtered_videos[COL_COUNTRY].isin(regions) | ~filtered_videos[COL_COUNTRY].isin(known_labels)
+            ]
+        else:
+            filtered_videos = filtered_videos[filtered_videos[COL_COUNTRY].isin(regions)]
+    if brands_active and COL_BRAND in filtered_videos.columns:
         filtered_videos = filtered_videos[filtered_videos[COL_BRAND].isin(brands)]
 
     quality_filtered = quality_df.copy()
     if not quality_filtered.empty:
-        if products and "product" in quality_filtered.columns:
+        if products_active and "product" in quality_filtered.columns:
             quality_filtered = quality_filtered[quality_filtered["product"].isin(products)]
-        if regions and "region" in quality_filtered.columns:
-            quality_filtered = quality_filtered[quality_filtered["region"].map(localize_region).isin(regions)]
+        if regions_active and "region" in quality_filtered.columns:
+            region_codes = region_codes_from_labels(regions)
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                quality_filtered = quality_filtered[
+                    quality_filtered["region"].isin(explicit_codes) | ~quality_filtered["region"].isin(REGION_CODES)
+                ]
+            else:
+                quality_filtered = quality_filtered[quality_filtered["region"].isin(region_codes)]
     if "comment_validity" in filtered_comments.columns:
         removed_count = int((filtered_comments["comment_validity"] == "excluded").sum())
         meaningful_count = int((filtered_comments["comment_validity"] == "valid").sum())
@@ -1311,7 +1430,11 @@ def _normalize_pill_state(key: str, options: list[str], defaults: list[str]) -> 
 
 def build_keyword_pack(comments_df: pd.DataFrame, sentiment_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     texts = tuple(comments_df.loc[comments_df["sentiment_label"] == sentiment_code, "cleaned_text"].fillna("").astype(str).tolist())
-    return build_keyword_summary(texts, top_n=6, version="v6"), build_keyword_summary(texts, top_n=30, version="v6")
+    blocked_keywords = _build_dynamic_keyword_excludes(comments_df)
+    return (
+        build_keyword_summary(texts, top_n=6, version="v7", blocked_keywords=blocked_keywords),
+        build_keyword_summary(texts, top_n=30, version="v7", blocked_keywords=blocked_keywords),
+    )
 
 
 
@@ -1921,6 +2044,212 @@ def _localized_video_title(title: str) -> str:
     return clean
 
 
+def _resolve_sentiment_for_card(working_selected: pd.Series, fallback_sentiment: str) -> str:
+    sentiment = _safe_text(
+        working_selected.get(
+            "nlp_label",
+            working_selected.get("display_sentiment", working_selected.get("sentiment_label", fallback_sentiment)),
+        )
+    ).lower()
+    if sentiment not in {"positive", "negative", "neutral", "trash"}:
+        return fallback_sentiment if fallback_sentiment in {"positive", "negative", "neutral", "trash"} else "neutral"
+    return sentiment
+
+
+def _confidence_ratio_for_card(working_selected: pd.Series, sentiment_label: str) -> float:
+    raw = working_selected.get("nlp_confidence", working_selected.get("confidence_level", ""))
+    if raw is None:
+        raw = ""
+
+    if isinstance(raw, (int, float)):
+        num = abs(float(raw))
+        if num > 1:
+            num = num / 100 if num <= 100 else 1.0
+        if 0 <= num <= 1:
+            return max(0.35, min(0.99, num))
+
+    text_val = _safe_text(raw).strip().lower()
+    if text_val.endswith("%"):
+        try:
+            return max(0.35, min(0.99, float(text_val.replace("%", "")) / 100))
+        except Exception:
+            pass
+
+    if text_val in {"very_high", "high", "높음"}:
+        return 0.90
+    if text_val in {"medium", "중간", "보통"}:
+        return 0.76
+    if text_val in {"low", "낮음"}:
+        return 0.62
+
+    fallback_map = {"negative": 0.88, "positive": 0.82, "neutral": 0.70, "trash": 0.75}
+    return fallback_map.get(sentiment_label, 0.72)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text_val = _safe_text(value).strip().lower()
+    return text_val in {"1", "true", "t", "y", "yes", "예", "네"}
+
+
+def _infer_inquiry_flag(working_selected: pd.Series, display_text: str) -> bool:
+    for key in ["inquiry_flag", "is_inquiry", "question_flag"]:
+        if key in working_selected.index and _truthy(working_selected.get(key)):
+            return True
+    text_val = _safe_text(display_text).lower()
+    inquiry_markers = ["?", "문의", "어떻게", "가능한가", "가능할까요", "can i", "how do i", "how to"]
+    return any(marker in text_val for marker in inquiry_markers)
+
+
+def _infer_quantitative_flag(working_selected: pd.Series, display_text: str) -> bool:
+    for key in ["quantitative_flag", "is_quantitative", "has_numeric", "numeric_flag"]:
+        if key in working_selected.index and _truthy(working_selected.get(key)):
+            return True
+    text_val = _safe_text(display_text)
+    return bool(re.search(r"\d+(\.\d+)?\s*(%|년|개월|주|일|시간|분|만원|원|kg|회|도|번)", text_val))
+
+
+def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, limit: int = 5) -> list[str]:
+    raw_keywords = working_selected.get("nlp_keywords", [])
+    if isinstance(raw_keywords, str):
+        try:
+            raw_keywords = json.loads(raw_keywords)
+        except Exception:
+            raw_keywords = [part.strip() for part in raw_keywords.split(",") if part.strip()]
+    if isinstance(raw_keywords, list):
+        normalized = [normalize_keyword(item) for item in raw_keywords]
+        cleaned = [item for item in normalized if item]
+        deduped = list(dict.fromkeys(cleaned))
+        if deduped:
+            return deduped[:limit]
+
+    text_candidates = [
+        _safe_text(working_selected.get("cleaned_text", "")),
+        _safe_text(working_selected.get(COL_ORIGINAL, "")),
+        _safe_text(working_selected.get("text_display", "")),
+    ]
+    text_candidates = [value for value in text_candidates if value]
+    if not text_candidates:
+        return []
+
+    counter = build_keyword_counter(tuple(text_candidates))
+    ranked = [keyword for keyword, _ in filter_business_keywords(counter, top_n=limit * 3)]
+    if not ranked:
+        return []
+
+    normalized_ranked = [normalize_keyword(keyword) for keyword in ranked]
+    cleaned_ranked = [item for item in normalized_ranked if item]
+    deduped_ranked = list(dict.fromkeys(cleaned_ranked))
+    return deduped_ranked[:limit]
+
+
+def _build_video_context_insight(working_selected: pd.Series, sentiment_name: str, aspect_label: str, keywords: list[str]) -> str:
+    channel = _safe_text(working_selected.get("channel_title", ""))
+    insight_type = _safe_text(working_selected.get("insight_type", ""))
+    voc_items = _extract_voc_items(working_selected, sentiment_name)
+    voc_insight = _safe_text(voc_items[0].get("insight", "")) if voc_items else ""
+    keyword_hint = ", ".join(keywords[:3]) if keywords else "핵심 품질/서비스 항목"
+    if voc_insight:
+        base = voc_insight
+    elif sentiment_name == "negative":
+        base = f"영상 맥락에서 '{aspect_label}' 관련 불만 신호가 반복되어, {keyword_hint} 이슈가 구매 후 경험에 직접 영향을 주는 흐름이 보입니다."
+    elif sentiment_name == "positive":
+        base = f"영상 맥락에서 '{aspect_label}' 강점이 반복 언급되어, {keyword_hint} 항목이 추천·재구매 요인으로 작동할 가능성이 높습니다."
+    else:
+        base = f"영상 맥락에서 '{aspect_label}' 관련 언급이 축적되어, {keyword_hint} 항목의 맥락 확인이 필요합니다."
+    if channel:
+        return f"[{channel}] 채널 맥락: {base}"
+    if insight_type and insight_type != "일반_의견":
+        return f"[{insight_type}] {base}"
+    return base
+
+
+def _build_resolution_point(sentiment_name: str, keywords: list[str], inquiry_flag: bool) -> str:
+    focus = ", ".join(keywords[:3]) if keywords else "핵심 이슈"
+    if sentiment_name == "negative":
+        if inquiry_flag:
+            return f"{focus} 관련 FAQ/고정댓글/챗봇 답변을 먼저 정교화하고, 반복 불만은 AS 프로세스 및 제품 개선 백로그로 즉시 연결하세요."
+        return f"{focus}의 원인 분류(제품/설치/서비스)를 먼저 나눈 뒤, 상위 케이스부터 담당 조직별 개선 액션을 주 단위로 추적하세요."
+    if sentiment_name == "positive":
+        return f"{focus} 강점을 영상 설명란·썸네일·후속 콘텐츠에 일관되게 재노출해 전환 포인트로 확장하세요."
+    return f"{focus} 관련 반응을 주차별로 모니터링하고, 긍정/부정 전환 신호가 커지면 즉시 대응 플로우를 붙이세요."
+
+
+def _render_representative_nlp_panel(working_selected: pd.Series, sentiment_name: str, aspect_label: str, display_text: str) -> None:
+    sentiment_value = _resolve_sentiment_for_card(working_selected, sentiment_name)
+    sentiment_map = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸"}
+    ratio = _confidence_ratio_for_card(working_selected, sentiment_value)
+    score_text = f"{int(round(ratio * 100))}%"
+    keywords = _extract_card_keywords(working_selected, sentiment_name, limit=5)
+    inquiry_flag = _infer_inquiry_flag(working_selected, display_text)
+    quantitative_flag = _infer_quantitative_flag(working_selected, display_text)
+
+    reason_candidates = [
+        _safe_text(working_selected.get("nlp_sentiment_reason", "")),
+        _safe_text(working_selected.get("display_reason", "")),
+        _safe_text(working_selected.get("classification_reason", "")),
+    ]
+    reason = next((item for item in reason_candidates if item and not _looks_garbled(item)), "")
+    if not reason:
+        reason = "감성 판단 근거를 구조화하기 위한 정보가 부족해, 원문 맥락 중심으로 확인이 필요합니다."
+
+    summary = _safe_text(working_selected.get("nlp_summary", ""))
+    if not summary or _looks_garbled(summary):
+        summary = _summarize_for_dashboard(working_selected, sentiment_name)
+    if not summary:
+        summary = _safe_text(display_text)[:120]
+
+    context_insight = _build_video_context_insight(working_selected, sentiment_name, aspect_label, keywords)
+    action_point = _build_resolution_point(sentiment_name, keywords, inquiry_flag)
+
+    sentiment_label = sentiment_map.get(sentiment_value, sentiment_value)
+    fill_color = {"negative": "#ef4444", "positive": "#3b82f6", "neutral": "#8b5cf6", "trash": "#64748b"}.get(sentiment_value, "#3b82f6")
+    keywords_html = "".join(f'<span class="rep-ai-kw">{html.escape(keyword)}</span>' for keyword in keywords)
+    if not keywords_html:
+        keywords_html = '<span class="rep-ai-kw">키워드 없음</span>'
+
+    st.markdown(
+        f"""
+        <div class="rep-ai-card">
+          <div class="rep-ai-head">
+            <div class="rep-ai-pill {sentiment_value}">{sentiment_label} ({sentiment_value})</div>
+            <div class="rep-ai-score">{score_text}</div>
+          </div>
+          <div class="rep-ai-progress-wrap">
+            <div class="rep-ai-progress-fill" style="width:{ratio * 100:.1f}%; background:{fill_color};"></div>
+          </div>
+          <div class="rep-ai-flags">
+            <span class="rep-ai-flag">문의: {str(inquiry_flag).lower()}</span>
+            <span class="rep-ai-flag">수치적질문: {str(quantitative_flag).lower()}</span>
+          </div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">판단 근거</div>
+            <div class="rep-ai-box">{html.escape(reason)}</div>
+          </div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">요약</div>
+            <div class="rep-ai-box">{html.escape(summary)}</div>
+          </div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">토픽 · 감성</div>
+            <div class="rep-ai-topic">
+              <span class="rep-ai-topic-title">{html.escape(aspect_label)}</span>
+              <span class="rep-ai-topic-sent">{sentiment_label}</span>
+            </div>
+          </div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">키워드</div>
+            <div class="rep-ai-kws">{keywords_html}</div>
+          </div>
+          <div class="rep-ai-insight"><strong>영상 맥락 인사이트</strong><br>{html.escape(context_insight)}</div>
+          <div class="rep-ai-action"><strong>해결 포인트</strong><br>{html.escape(action_point)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source_comments: pd.DataFrame | None = None) -> None:
     if key_prefix.startswith("negative"):
         sentiment_name = "negative"
@@ -1950,16 +2279,10 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             translation = _resolve_card_translation(original_text, raw_translation, is_korean)
             display_text = original_text if is_korean else (translation or original_text)
 
-            nlp_label_val = _safe_text(working_selected.get("nlp_label", ""))
             insight_type_val = _safe_text(selected.get("insight_type", ""))
             product_val = _safe_text(selected.get("product", ""))
             cej_val = _safe_text(selected.get(COL_CEJ, ""))
             brand_val = _safe_text(selected.get(COL_BRAND, ""))
-            nlp_summary_text = _safe_text(working_selected.get("nlp_summary", ""))
-            nlp_reason = _safe_text(working_selected.get("nlp_sentiment_reason", ""))
-            nlp_kw_val = working_selected.get("nlp_keywords", [])
-            if not isinstance(nlp_kw_val, list):
-                nlp_kw_val = []
 
             # ============================================================
             # HEADER: 번호 + 토픽명 + 메타 배지
@@ -1980,48 +2303,20 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 unsafe_allow_html=True,
             )
 
-            # ============================================================
-            # 구조화된 NLP 분석 결과 (판단근거 + 요약 + 토픽감성 + 키워드)
-            # ============================================================
-            # 감성 배지
-            if nlp_label_val:
-                sentiment_colors = {"positive": "#2563eb", "negative": "#dc2626", "neutral": "#6b7280", "trash": "#9333ea"}
-                sentiment_labels = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸"}
-                s_color = sentiment_colors.get(nlp_label_val, "#6b7280")
-                s_label = sentiment_labels.get(nlp_label_val, nlp_label_val)
+            preview_text = display_text.strip()
+            if preview_text:
+                preview = preview_text[:220] + ("..." if len(preview_text) > 220 else "")
                 st.markdown(
-                    f'<div style="display:inline-block; background:{s_color}; color:white; padding:4px 16px; border-radius:20px; font-size:14px; font-weight:600; margin-bottom:8px;">'
-                    f'{s_label} ({nlp_label_val})</div>',
+                    f'<div class="voc-comment-text" style="margin:6px 0 10px;">{html.escape(preview)}</div>',
                     unsafe_allow_html=True,
                 )
 
-            # 판단 근거
-            if nlp_reason:
-                st.markdown(
-                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">판단 근거</span></div>'
-                    f'<div style="background:#f8fafc; border-left:3px solid #94a3b8; padding:8px 12px; font-size:14px; color:#334155; margin-bottom:8px;">{nlp_reason}</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # AI 요약
-            if nlp_summary_text:
-                st.markdown(
-                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">요약</span></div>'
-                    f'<div style="font-size:14px; color:#1e293b; font-style:italic; margin-bottom:8px;">{nlp_summary_text}</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # 키워드 칩
-            if nlp_kw_val:
-                kw_chips = " ".join(
-                    f'<span style="display:inline-block; background:#e2e8f0; color:#334155; padding:3px 10px; border-radius:12px; font-size:12px; margin:2px;">{kw}</span>'
-                    for kw in nlp_kw_val[:6]
-                )
-                st.markdown(
-                    f'<div style="margin:6px 0;"><span style="color:#64748b; font-size:13px; font-weight:600;">키워드</span></div>'
-                    f'<div style="margin-bottom:8px;">{kw_chips}</div>',
-                    unsafe_allow_html=True,
-                )
+            _render_representative_nlp_panel(
+                working_selected=working_selected,
+                sentiment_name=sentiment_name,
+                aspect_label=aspect_label,
+                display_text=display_text,
+            )
 
             # ============================================================
             # 관련 영상 + 날짜
@@ -2385,9 +2680,11 @@ def get_mode() -> str:
 
 
 def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame) -> dict[str, list[str]]:
-    comment_products = comments_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
-    video_products = videos_df.get("product", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
-    all_data_products = sorted(set(comment_products + video_products))
+    comment_products_raw = comments_df.get("product", pd.Series(dtype=str)).dropna().astype(str).tolist()
+    video_products_raw = videos_df.get("product", pd.Series(dtype=str)).dropna().astype(str).tolist()
+    comment_products = [canonicalize_product_label(item) for item in comment_products_raw]
+    video_products = [canonicalize_product_label(item) for item in video_products_raw]
+    all_data_products = sorted({item for item in (comment_products + video_products) if item})
     available_products = [item for item in PRODUCT_ORDER if item in all_data_products]
     extra_from_data = [p for p in all_data_products if p and p not in PRODUCT_ORDER]
     available_products.extend(extra_from_data)
@@ -2531,16 +2828,31 @@ def _render_sidebar_filters(options: dict[str, list[str]]) -> dict[str, Any]:
                 placeholder="예: 소음, 냉각, warranty",
             )
 
-    # When all options are selected, treat as "no filter" (empty list)
-    def _effective(selected: list, all_opts: list) -> list:
-        return [] if set(selected) >= set(all_opts) else list(selected)
+    def _normalize_selection(selected: list[str], all_opts: list[str]) -> list[str]:
+        return [item for item in selected if item in all_opts]
+
+    def _is_filter_active(selected: list[str], all_opts: list[str]) -> bool:
+        if not all_opts:
+            return False
+        return set(selected) != set(all_opts)
+
+    selected_products = _normalize_selection(list(selected_products or []), options["products"])
+    selected_regions = _normalize_selection(list(selected_regions or []), options["regions"])
+    selected_brands = _normalize_selection(list(selected_brands or []), options["brands"])
+    selected_sentiments = _normalize_selection(list(selected_sentiments or []), options["sentiments"])
+    selected_cej = _normalize_selection(list(selected_cej or []), options["cej"])
 
     filters = {
-        "products": _effective(selected_products, options["products"]),
-        "regions": _effective(selected_regions, options["regions"]),
-        "sentiments": _effective(selected_sentiments, options["sentiments"]),
-        "cej": _effective(selected_cej, options["cej"]),
-        "brands": _effective(selected_brands, options["brands"]),
+        "products": selected_products,
+        "regions": selected_regions,
+        "sentiments": selected_sentiments,
+        "cej": selected_cej,
+        "brands": selected_brands,
+        "products_active": _is_filter_active(selected_products, options["products"]),
+        "regions_active": _is_filter_active(selected_regions, options["regions"]),
+        "sentiments_active": _is_filter_active(selected_sentiments, options["sentiments"]),
+        "cej_active": _is_filter_active(selected_cej, options["cej"]),
+        "brands_active": _is_filter_active(selected_brands, options["brands"]),
         "keyword_query": keyword_query,
         "analysis_scope": analysis_scope,
     }
@@ -2762,6 +3074,9 @@ def main() -> None:
     filtered_comments = bundle["comments"]
     all_comments = bundle.get("all_comments", filtered_comments)
     filtered_videos = bundle["videos"]
+    products_active = bool(selected_filters.get("products_active", bool(selected_filters.get("products"))))
+    regions_active = bool(selected_filters.get("regions_active", bool(selected_filters.get("regions"))))
+    brands_active = bool(selected_filters.get("brands_active", bool(selected_filters.get("brands"))))
 
     # Default weekly window for download (chart controls override inline later)
     weekly_window, _ = build_weekly_sentiment_window(filtered_comments, WEEKLY_CHART_DEFAULT, 1)
@@ -2769,39 +3084,57 @@ def main() -> None:
     cej_df = data.get("cej_negative_rate", pd.DataFrame()).copy()
     if not cej_df.empty:
         cej_df[COL_COUNTRY] = cej_df["region"].map(localize_region)
-        if selected_filters["products"]:
+        if products_active:
             cej_df = cej_df[cej_df["product"].isin(selected_filters["products"])]
-        if selected_filters["regions"]:
-            cej_df = cej_df[cej_df[COL_COUNTRY].isin(selected_filters["regions"])]
+        if regions_active:
+            known_labels = set(REGION_LABELS.values())
+            if REGION_OTHER_LABEL in selected_filters["regions"]:
+                cej_df = cej_df[
+                    cej_df[COL_COUNTRY].isin(selected_filters["regions"]) | ~cej_df[COL_COUNTRY].isin(known_labels)
+                ]
+            else:
+                cej_df = cej_df[cej_df[COL_COUNTRY].isin(selected_filters["regions"])]
 
     brand_df = data.get("brand_ratio", pd.DataFrame()).copy()
     if not brand_df.empty:
         brand_df[COL_COUNTRY] = brand_df["region"].map(localize_region)
-        if selected_filters["products"]:
+        if products_active:
             brand_df = brand_df[brand_df["product"].isin(selected_filters["products"])]
-        if selected_filters["regions"]:
-            brand_df = brand_df[brand_df[COL_COUNTRY].isin(selected_filters["regions"])]
-        if selected_filters["brands"] and COL_BRAND in brand_df.columns:
+        if regions_active:
+            known_labels = set(REGION_LABELS.values())
+            if REGION_OTHER_LABEL in selected_filters["regions"]:
+                brand_df = brand_df[
+                    brand_df[COL_COUNTRY].isin(selected_filters["regions"]) | ~brand_df[COL_COUNTRY].isin(known_labels)
+                ]
+            else:
+                brand_df = brand_df[brand_df[COL_COUNTRY].isin(selected_filters["regions"])]
+        if brands_active and COL_BRAND in brand_df.columns:
             brand_df[COL_BRAND] = brand_df[COL_BRAND].map(canonicalize_brand)
             brand_df = brand_df[brand_df[COL_BRAND].isin(selected_filters["brands"])]
 
     density_df = data.get("negative_density", pd.DataFrame()).copy()
     if not density_df.empty:
-        if selected_filters["products"] and "product" in density_df.columns:
+        if products_active and "product" in density_df.columns:
             density_df = density_df[density_df["product"].isin(selected_filters["products"])]
-        if selected_filters["regions"] and "region" in density_df.columns:
+        if regions_active and "region" in density_df.columns:
             region_codes = region_codes_from_labels(selected_filters["regions"])
-            density_df = density_df[density_df["region"].isin(region_codes)]
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                density_df = density_df[
+                    density_df["region"].isin(explicit_codes) | ~density_df["region"].isin(REGION_CODES)
+                ]
+            else:
+                density_df = density_df[density_df["region"].isin(region_codes)]
 
     if filtered_comments.empty:
         st.warning("현재 선택한 필터에 맞는 댓글이 없습니다. 필터를 넓히거나 문의/감성 범위를 다시 선택해 주세요.")
         st.caption("선택 결과를 다른 데이터로 대체하지 않고, 실제 0건 상태를 그대로 보여줍니다.")
         st.dataframe(pd.DataFrame([{
-            "제품": format_selection(selected_filters["products"]),
-            "국가": format_selection(selected_filters["regions"]),
-            "브랜드": format_selection(selected_filters["brands"]),
-            "감성": format_selection(selected_filters["sentiments"]),
-            "CEJ": format_selection(selected_filters["cej"]),
+            "제품": format_selection(selected_filters["products"], empty_label="선택 없음"),
+            "국가": format_selection(selected_filters["regions"], empty_label="선택 없음"),
+            "브랜드": format_selection(selected_filters["brands"], empty_label="선택 없음"),
+            "감성": format_selection(selected_filters["sentiments"], empty_label="선택 없음"),
+            "CEJ": format_selection(selected_filters["cej"], empty_label="선택 없음"),
             "분석 유형": selected_filters.get("analysis_scope", "전체"),
             "키워드": selected_filters["keyword_query"] or "-",
         }]), hide_index=True, use_container_width=True)
@@ -2816,17 +3149,29 @@ def main() -> None:
     monitoring_df = data.get("monitoring_summary", pd.DataFrame()).copy()
     reporting_df = data.get("reporting_summary", pd.DataFrame()).copy()
     if not monitoring_df.empty:
-        if selected_filters["products"] and "product" in monitoring_df.columns:
+        if products_active and "product" in monitoring_df.columns:
             monitoring_df = monitoring_df[monitoring_df["product"].isin(selected_filters["products"])]
-        if selected_filters["regions"] and "region" in monitoring_df.columns:
+        if regions_active and "region" in monitoring_df.columns:
             region_codes = region_codes_from_labels(selected_filters["regions"])
-            monitoring_df = monitoring_df[monitoring_df["region"].isin(region_codes)]
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                monitoring_df = monitoring_df[
+                    monitoring_df["region"].isin(explicit_codes) | ~monitoring_df["region"].isin(REGION_CODES)
+                ]
+            else:
+                monitoring_df = monitoring_df[monitoring_df["region"].isin(region_codes)]
     if not reporting_df.empty:
-        if selected_filters["products"] and "product" in reporting_df.columns:
+        if products_active and "product" in reporting_df.columns:
             reporting_df = reporting_df[reporting_df["product"].isin(selected_filters["products"])]
-        if selected_filters["regions"] and "region" in reporting_df.columns:
+        if regions_active and "region" in reporting_df.columns:
             region_codes = region_codes_from_labels(selected_filters["regions"])
-            reporting_df = reporting_df[reporting_df["region"].isin(region_codes)]
+            if REGION_OTHER_LABEL in region_codes:
+                explicit_codes = [code for code in region_codes if code != REGION_OTHER_LABEL]
+                reporting_df = reporting_df[
+                    reporting_df["region"].isin(explicit_codes) | ~reporting_df["region"].isin(REGION_CODES)
+                ]
+            else:
+                reporting_df = reporting_df[reporting_df["region"].isin(region_codes)]
 
     if not filtered_comments.empty:
         if "comment_id" in filtered_comments.columns:
