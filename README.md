@@ -83,6 +83,11 @@ pip install -e .[dev]
 copy .env.example .env
 ```
 
+`nlp_analyzer`를 함께 쓰는 로컬 환경이라면 아래를 추가로 설치하세요.
+```bash
+pip install -r requirements.nlp-analyzer.txt
+```
+
 ## Environment Variables
 - `YOUTUBE_API_KEY`: YouTube Data API v3 key. 필수입니다.
 - `YT_ANALYSIS_SETTINGS_PATH`: YAML 설정 경로. 기본값 `config/settings.example.yaml`

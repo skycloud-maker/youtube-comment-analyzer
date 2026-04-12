@@ -1,0 +1,4 @@
+# Optional local dependency.
+# Keep this out of Streamlit Cloud base install unless the package is available
+# from an accessible index/repository.
+nlp_analyzer>=0.1.0

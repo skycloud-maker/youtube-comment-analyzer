@@ -15,5 +15,3 @@ matplotlib>=3.8.0
 
 wordcloud>=1.9.3
 koreanize-matplotlib
-
-nlp_analyzer>=0.1.0
