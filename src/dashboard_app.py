@@ -2879,10 +2879,17 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
     for col in ["분석_전체_댓글_수", "긍정_댓글_수", "부정_댓글_수", "중립_댓글_수", "제외_댓글_수"]:
         if col in summary.columns:
             summary[col] = pd.to_numeric(summary[col], errors="coerce").fillna(0)
-    summary[COL_COUNTRY] = summary.get(COL_COUNTRY, summary.get("region", pd.Series(dtype=str)).map(localize_region))
+    if COL_COUNTRY in summary.columns:
+        country_series = summary[COL_COUNTRY]
+    elif "region" in summary.columns:
+        country_series = summary["region"].map(localize_region)
+    else:
+        country_series = pd.Series(pd.NA, index=summary.index, dtype="object")
+    summary[COL_COUNTRY] = country_series
     summary[COL_VIDEO_LINK] = summary.get("video_url", "")
     summary[COL_VIDEO_TITLE] = summary.get("title", "")
-    summary["\ubc1c\ud589\uc77c"] = pd.to_datetime(summary.get("published_at"), errors="coerce").dt.strftime("%Y-%m-%d")
+    published_source = summary["published_at"] if "published_at" in summary.columns else pd.Series(pd.NA, index=summary.index, dtype="object")
+    summary["발행일"] = pd.to_datetime(published_source, errors="coerce").dt.strftime("%Y-%m-%d")
     # ✅ 새 컬럼명 기준으로 정렬 (없으면 있는 컬럼만으로 정렬)
     sort_cols = [c for c in ["부정_댓글_수", "분석_전체_댓글_수", "view_count"] if c in summary.columns]
     if not sort_cols:
@@ -2904,9 +2911,8 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
     all_video_comments = all_comments.copy()
 
     # 2) 분석 대상(valid)만 (여기서 중립까지 포함)
-    analysis_comments = all_video_comments[
-        all_video_comments.get("comment_validity", "valid").astype(str) == "valid"
-    ].copy()
+    validity_series = all_video_comments.get("comment_validity", pd.Series("valid", index=all_video_comments.index))
+    analysis_comments = all_video_comments[validity_series.astype(str) == "valid"].copy()
 
     summary = build_video_summary(all_video_comments, filtered_videos)
 

@@ -8,6 +8,7 @@ from src.dashboard_app import (
     REQUIRED_RESULT_FILES,
     _build_missing_data_message,
     _build_synthetic_sample_bundle,
+    build_video_summary,
     build_comment_showcase,
     load_sample_dashboard_data,
 )
@@ -111,3 +112,27 @@ def test_missing_data_message_mentions_required_files(monkeypatch) -> None:
     message = _build_missing_data_message()
     for filename in REQUIRED_RESULT_FILES:
         assert filename in message
+
+
+def test_build_video_summary_handles_missing_published_at_column() -> None:
+    comments = pd.DataFrame(
+        [
+            {"video_id": "v1", "sentiment_label": "negative", "comment_validity": "valid", "like_count": 3},
+            {"video_id": "v1", "sentiment_label": "neutral", "comment_validity": "valid", "like_count": 1},
+        ]
+    )
+    videos = pd.DataFrame(
+        [
+            {
+                "video_id": "v1",
+                "title": "sample",
+                "video_url": "https://example.com/v1",
+                "region": "KR",
+                # intentionally no published_at
+            }
+        ]
+    )
+
+    summary = build_video_summary(comments, videos)
+    assert len(summary) == 1
+    assert "발행일" in summary.columns
