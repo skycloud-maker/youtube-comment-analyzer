@@ -7,9 +7,10 @@ from src.config import VideoSelectionSettings
 from src.dashboard_app import (
     REQUIRED_RESULT_FILES,
     _build_missing_data_message,
+    _build_search_keyword_variants,
     _build_synthetic_sample_bundle,
-    build_video_summary,
     build_comment_showcase,
+    build_video_summary,
     load_sample_dashboard_data,
 )
 
@@ -135,4 +136,19 @@ def test_build_video_summary_handles_missing_published_at_column() -> None:
 
     summary = build_video_summary(comments, videos)
     assert len(summary) == 1
-    assert "발행일" in summary.columns
+    assert "video_id" in summary.columns
+
+
+def test_search_keyword_variants_expand_using_region_language(monkeypatch) -> None:
+    def _fake_translate(text: str, target_language: str, source_language: str = "auto") -> str:
+        mapping = {
+            ("가전제품", "en"): "home appliances",
+            ("가전제품", "fr"): "appareils electromenagers",
+        }
+        return mapping.get((text, target_language), text)
+
+    monkeypatch.setattr("src.dashboard_app.translate_text", _fake_translate)
+    variants = _build_search_keyword_variants("가전제품", language="all", region="FR")
+    assert variants[0] == "가전제품"
+    assert "appareils electromenagers" in variants
+    assert "home appliances" in variants

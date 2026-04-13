@@ -211,3 +211,22 @@ def translate_to_korean(text: str) -> str:
     if ASCII_RE.match(value):
         return _fallback_english_to_korean(prepared)
     return "한국어 번역을 준비 중입니다."
+
+
+@lru_cache(maxsize=4096)
+def translate_text(text: str, target_language: str, source_language: str = "auto") -> str:
+    """Translate short query text to a target language.
+
+    Fails safe by returning the source text when translation is unavailable.
+    """
+    value = (text or "").strip()
+    target = (target_language or "").strip()
+    source = (source_language or "auto").strip()
+    if not value or not target:
+        return value
+    try:
+        translated = GoogleTranslator(source=source, target=target).translate(value)
+    except Exception:
+        return value
+    translated_text = WHITESPACE_RE.sub(" ", str(translated or "")).strip()
+    return translated_text or value

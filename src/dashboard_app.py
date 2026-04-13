@@ -28,7 +28,7 @@ import streamlit as st
 
 from src.analytics.keywords import BUSINESS_KEEPWORDS, build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
 from src.config import load_yaml_settings_optional
-from src.utils.translation import translate_to_korean
+from src.utils.translation import translate_text, translate_to_korean
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 APP_SETTINGS = load_yaml_settings_optional()
@@ -138,6 +138,57 @@ SESSION_DATA_BUNDLE_KEY = "dashboard_data_bundle"
 SESSION_DATA_MODE_KEY = "dashboard_data_mode"
 SESSION_DATA_SIGNATURE_KEY = "dashboard_data_signature"
 SESSION_LAST_RUN_RESULT_KEY = "dashboard_last_run_result"
+ANALYSIS_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("한국", "KR"),
+    ("미국", "US"),
+    ("캐나다", "CA"),
+    ("영국", "GB"),
+    ("프랑스", "FR"),
+    ("이탈리아", "IT"),
+    ("독일", "DE"),
+    ("사우디아라비아", "SA"),
+    ("이집트", "EG"),
+    ("인도", "IN"),
+    ("인도네시아", "ID"),
+    ("러시아", "RU"),
+    ("베트남", "VN"),
+    ("대만", "TW"),
+    ("태국", "TH"),
+    ("호주", "AU"),
+    ("브라질", "BR"),
+    ("콜롬비아", "CO"),
+    ("멕시코", "MX"),
+    ("페루", "PE"),
+)
+ANALYSIS_LANGUAGE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("한국어", "ko"),
+    ("영어", "en"),
+    ("기타 언어(언어 제한 없음)", "all"),
+)
+REGION_PRIMARY_LANGUAGE_HINTS: dict[str, tuple[str, ...]] = {
+    "KR": ("ko",),
+    "US": ("en",),
+    "CA": ("en", "fr"),
+    "GB": ("en",),
+    "FR": ("fr",),
+    "IT": ("it",),
+    "DE": ("de",),
+    "SA": ("ar",),
+    "EG": ("ar",),
+    "IN": ("hi", "en"),
+    "ID": ("id",),
+    "RU": ("ru",),
+    "VN": ("vi",),
+    "TW": ("zh-TW",),
+    "TH": ("th",),
+    "AU": ("en",),
+    "BR": ("pt",),
+    "CO": ("es",),
+    "MX": ("es",),
+    "PE": ("es",),
+}
+LANGUAGE_NO_FILTER_MARKERS = {"all", "any", "other", "*"}
+MAX_QUERY_VARIANTS = 5
 
 def _build_empty_buckets() -> dict[str, list[pd.DataFrame]]:
     return {key: [] for key, _ in DASHBOARD_DATASETS}
@@ -488,29 +539,96 @@ def _set_data_mode(mode: str, *, force_refresh: bool = False) -> None:
 
 
 def _run_real_analysis_action(keyword: str, max_videos: int, comments_per_video: int, language: str, region: str, output_prefix: str) -> tuple[bool, str]:
+    keyword_variants = _build_search_keyword_variants(keyword, language=language, region=region)
+    primary_keyword = keyword_variants[0] if keyword_variants else keyword
     command = [
         sys.executable,
         "-m",
         "src.main",
         "run",
         "--keyword",
-        keyword,
+        primary_keyword,
         "--max-videos",
         str(max_videos),
         "--comments-per-video",
         str(comments_per_video),
-        "--language",
-        language,
         "--region",
         region,
         "--output-prefix",
         output_prefix,
     ]
+    if len(keyword_variants) > 1:
+        command.extend(["--keywords", *keyword_variants[1:]])
+    if language and language.lower() not in LANGUAGE_NO_FILTER_MARKERS:
+        command.extend(["--language", language])
     completed = subprocess.run(command, cwd=str(BASE_DIR), capture_output=True, text=True)
     if completed.returncode != 0:
         error_text = (completed.stderr or completed.stdout or "").strip()
         return False, error_text[-1200:]
     return True, (completed.stdout or "").strip()
+
+
+def _normalize_query_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _normalize_language_code(code: str) -> str:
+    raw = str(code or "").strip()
+    lowered = raw.lower()
+    if lowered in {"zh_tw", "zh-tw", "zh_hant"}:
+        return "zh-TW"
+    if lowered in {"pt_br", "pt-br"}:
+        return "pt"
+    if lowered in {"en-us", "en-gb"}:
+        return "en"
+    if lowered in {"ko-kr"}:
+        return "ko"
+    if lowered in {"ar-sa"}:
+        return "ar"
+    return raw
+
+
+def _build_search_keyword_variants(keyword: str, *, language: str, region: str) -> list[str]:
+    seed = _normalize_query_text(keyword)
+    if not seed:
+        return []
+
+    target_languages: list[str] = []
+    chosen_language = str(language or "").strip().lower()
+    region_code = str(region or "").strip().upper()
+
+    if chosen_language and chosen_language not in LANGUAGE_NO_FILTER_MARKERS:
+        target_languages.append(_normalize_language_code(chosen_language))
+    else:
+        target_languages.extend(_normalize_language_code(code) for code in REGION_PRIMARY_LANGUAGE_HINTS.get(region_code, ()))
+        target_languages.extend(["ko", "en"])
+
+    deduped_targets: list[str] = []
+    seen_targets: set[str] = set()
+    for code in target_languages:
+        normalized = _normalize_language_code(code).strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen_targets:
+            continue
+        seen_targets.add(key)
+        deduped_targets.append(normalized)
+
+    variants: list[str] = [seed]
+    seen_variants: set[str] = {seed.casefold()}
+    for target in deduped_targets:
+        translated = _normalize_query_text(translate_text(seed, target))
+        if not translated:
+            continue
+        key = translated.casefold()
+        if key in seen_variants:
+            continue
+        seen_variants.add(key)
+        variants.append(translated)
+        if len(variants) >= MAX_QUERY_VARIANTS:
+            break
+    return variants
 
 
 @st.cache_data(show_spinner=False)
@@ -3534,11 +3652,28 @@ def main() -> None:
 
         with st.expander("실제 분석 실행", expanded=False):
             run_keyword = st.text_input("검색 키워드", value="가전 리뷰")
-            run_region = st.selectbox("시장", ["KR", "US"], index=0)
-            run_language = st.selectbox("언어", ["ko", "en"], index=0)
+            market_labels = [label for label, _ in ANALYSIS_MARKET_OPTIONS]
+            market_code_by_label = dict(ANALYSIS_MARKET_OPTIONS)
+            default_market_index = next((i for i, (_, code) in enumerate(ANALYSIS_MARKET_OPTIONS) if code == "KR"), 0)
+            selected_market_label = st.selectbox("시장", market_labels, index=default_market_index)
+            run_region = market_code_by_label[selected_market_label]
+
+            language_labels = [label for label, _ in ANALYSIS_LANGUAGE_OPTIONS]
+            language_code_by_label = dict(ANALYSIS_LANGUAGE_OPTIONS)
+            default_language_index = next((i for i, (_, code) in enumerate(ANALYSIS_LANGUAGE_OPTIONS) if code == "ko"), 0)
+            selected_language_label = st.selectbox("언어", language_labels, index=default_language_index)
+            run_language = language_code_by_label[selected_language_label]
             run_max_videos = st.number_input("수집 영상 수", min_value=5, max_value=200, value=40, step=5)
             run_comments_per_video = st.number_input("영상당 댓글 수(0=전체)", min_value=0, max_value=2000, value=0, step=50)
             run_output_prefix = st.text_input("결과 파일 prefix", value="dashboard_live")
+            keyword_preview = _build_search_keyword_variants(
+                run_keyword,
+                language=run_language,
+                region=run_region,
+            ) if run_keyword.strip() else []
+            if keyword_preview:
+                st.caption("이번 실행 예상 검색 키워드")
+                st.code("\n".join(keyword_preview))
             if st.button("실분석 실행", width="stretch", type="secondary"):
                 if not run_keyword.strip():
                     st.warning("검색 키워드를 입력해 주세요.")

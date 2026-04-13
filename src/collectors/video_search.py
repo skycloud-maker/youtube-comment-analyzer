@@ -61,9 +61,11 @@ class VideoSearchCollector:
                 "type": "video",
                 "maxResults": 50,
                 "order": config.order,
-                "relevanceLanguage": config.language,
                 "regionCode": config.region,
             }
+            language = str(config.language or "").strip().lower()
+            if language and language not in {"all", "any", "other", "*"}:
+                params["relevanceLanguage"] = config.language
             if config.published_after:
                 params["publishedAfter"] = config.published_after
             if config.published_before:
