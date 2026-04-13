@@ -394,14 +394,18 @@ def analyze_comment_with_context(
         nlp_result = analyze_with_nlp(cid, source_text, provider=nlp_provider)
         if nlp_result is not None:
             nlp_fields = nlp_result
-            # Override sentiment with nlp_analyzer when it has high confidence
             nlp_label = nlp_result.get("nlp_label", "")
             nlp_conf = nlp_result.get("nlp_confidence", 0.0)
-            if nlp_label in ("positive", "negative", "neutral") and nlp_conf >= 0.6:
+            if nlp_label in ("positive", "negative", "neutral"):
                 sentiment = nlp_label
                 score = nlp_result.get("nlp_sentiment_score", score)
                 reason = nlp_result.get("nlp_sentiment_reason", reason)
-                confidence = "high" if nlp_conf >= 0.8 else "medium"
+                if nlp_conf >= 0.8:
+                    confidence = "high"
+                elif nlp_conf >= 0.55:
+                    confidence = "medium"
+                else:
+                    confidence = "low"
             elif nlp_label == "trash":
                 sentiment = "neutral"
                 classification_type = "informational"

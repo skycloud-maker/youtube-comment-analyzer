@@ -1458,48 +1458,36 @@ def _summarize_for_dashboard(selected: pd.Series, sentiment_name: str) -> str:
     translation = _safe_text(selected.get(COL_TRANSLATION, ""))
     if not translation or translation == original or _looks_garbled(translation) or not _looks_korean_text(translation):
         translation = _resolve_card_translation(original, translation, False)
-
-    lowered_original = original.lower()
-    if "old refrigerators were easier to clean" in lowered_original or "sometimes newer isn't always better" in lowered_original:
-        return "예전 냉장고가 더 단순하고 오래 갔다는 경험을 바탕으로, 최신 제품이 꼭 더 낫지는 않다는 의견입니다."
-    if any(token in lowered_original for token in ["sku", "unreliable", "overdesign", "overdesigned"]):
-        return "회사들이 제품을 지나치게 복잡하게 설계하면서 신뢰성이 떨어진다는 불만과, 단순하고 튼튼한 설계를 선호한다는 인식이 함께 드러납니다."
-    if any(token in lowered_original for token in ["cpu", "reorder milk", "starve"]):
-        return "스마트 기능을 풍자적으로 언급하며, 냉장고에 과한 자동화 기능을 기대하거나 그런 기능 중심 설계를 비판하는 의견입니다."
-    if any(token in lowered_original for token in ["compressor", "warranty", "service", "called for service", "not cooling", "warmer than"]):
-        return "냉각 성능 저하와 반복되는 수리·보증 경험을 설명하며, 제품 신뢰성과 서비스 대응에 대한 불만을 담고 있습니다."
-
-    source_text = translation if translation and translation != "한국어 번역을 준비 중입니다." else original
-    source_text = re.sub(r"\s+", " ", _safe_text(source_text)).strip()
+    source_text = (translation if translation and translation != "한국어 번역을 준비 중입니다." else original).strip()
     if not source_text:
-        return "핵심 의견: 제품 사용 경험에 대한 평가가 있으나 추가 맥락이 필요합니다."
+        return "제품 관련 경험을 언급했지만 핵심 맥락이 부족해 추가 확인이 필요한 댓글입니다."
 
-    product_tokens = [token for token in ["드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기"] if token in source_text]
-    issue_patterns = [
-        (["고장", "수리", "as", "서비스", "출장비", "보증"], "A/S·수리 대응"),
-        (["소음", "진동", "탈수", "세척력", "건조", "성능"], "핵심 성능"),
-        (["불편", "편함", "무겁", "허리", "꺼내", "조작"], "사용 편의"),
-        (["옷감", "손상", "보풀", "엉킴", "늘어", "비틀"], "옷감 관리"),
-        (["가격", "비싸", "비용", "전기세"], "비용 부담"),
-        (["배송", "설치", "기사"], "배송·설치"),
+    lowered = source_text.lower()
+    products = [token for token in ["드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기"] if token in source_text]
+    product_subject = "·".join(products[:2]) if products else "해당 제품"
+
+    scenarios = [
+        (["구독", "가입", "권유", "매니저", "할부"], "구독 가입/권유 과정"),
+        (["고장", "수리", "as", "서비스", "출장", "보증"], "A/S·수리 대응"),
+        (["배송", "설치", "기사"], "배송·설치 과정"),
+        (["소음", "진동", "탈수", "세척", "건조", "성능", "냉각"], "핵심 성능 체감"),
+        (["불편", "무겁", "허리", "꺼내", "조작"], "사용 편의"),
+        (["가격", "비싸", "비용", "전기세"], "가격·비용 부담"),
+        (["옷감", "보풀", "손상", "엉킴", "늘어"], "옷감 관리 경험"),
     ]
-    issue_hits = [label for markers, label in issue_patterns if any(marker in source_text.lower() for marker in markers)]
+    scenario = next((label for markers, label in scenarios if any(marker in lowered for marker in markers)), "사용 경험")
 
-    clauses = [part.strip(" ,") for part in re.split(r"[.!?\n]+|(?:, 그리고 )|(?: 그래서 )|(?: 하지만 )|(?: 근데 )", source_text) if part.strip()]
-    top_clause = clauses[0] if clauses else source_text
-    if len(top_clause) > 80:
-        top_clause = top_clause[:77].rstrip() + "..."
+    inquiry_flag = _truthy(selected.get("nlp_is_inquiry")) or _truthy(selected.get("inquiry_flag")) or ("?" in source_text)
+    keywords = _extract_card_keywords(selected, sentiment_name, limit=3)
+    focus = ", ".join(keywords[:2]) if keywords else scenario
 
-    subject = " / ".join(product_tokens[:2]) if product_tokens else "해당 제품"
+    if inquiry_flag:
+        return f"{product_subject} 관련 {scenario}에서 '{focus}' 정보를 확인하려는 문의성 댓글입니다."
     if sentiment_name == "negative":
-        sentiment_phrase = "불편·불만을 제기합니다"
-    elif sentiment_name == "positive":
-        sentiment_phrase = "강점·만족을 강조합니다"
-    else:
-        sentiment_phrase = "평가와 경험을 함께 전달합니다"
-    unique_issue_hits = list(dict.fromkeys(issue_hits))
-    issue_phrase = ", ".join(unique_issue_hits[:2]) if unique_issue_hits else "사용 경험"
-    return f"{subject} 관련 {issue_phrase} 이슈를 중심으로, '{top_clause}'라는 맥락에서 {sentiment_phrase}."
+        return f"{product_subject} 관련 {scenario}에서 '{focus}' 이슈로 불편·불만을 제기한 댓글입니다."
+    if sentiment_name == "positive":
+        return f"{product_subject} 관련 {scenario}에서 '{focus}' 강점에 대한 만족·추천 의사를 드러낸 댓글입니다."
+    return f"{product_subject} 관련 {scenario}에서 '{focus}'에 대한 평가와 경험을 함께 전달한 댓글입니다."
 
 
 def _decision_badge(decision: str) -> tuple[str, str]:
@@ -2797,7 +2785,10 @@ def _infer_inquiry_flag(working_selected: pd.Series, display_text: str) -> bool:
     lowered = source.lower()
     if "?" in source:
         return True
-    inquiry_markers = ["어떻게", "어디", "왜", "무엇", "뭔가요", "가능한가", "가능할까요", "문의", "질문", "how", "where", "why", "what", "can i", "does it", "is it"]
+    inquiry_markers = [
+        "어떻게", "어디", "왜", "무엇", "뭔가요", "가능한가", "가능할까요", "인가요", "될까요",
+        "문의", "질문", "how", "where", "why", "what", "can i", "does it", "is it",
+    ]
     return any(marker in lowered for marker in inquiry_markers)
 
 
@@ -2907,6 +2898,82 @@ def _build_resolution_point(sentiment_name: str, keywords: list[str], inquiry_fl
     return f"{focus} 관련 반응을 주차별로 모니터링하고, 긍정/부정 전환 신호가 커지면 즉시 대응 플로우를 붙이세요."
 
 
+ASPECT_LABEL_KO = {
+    "A/S & Support": "A/S·고객지원",
+    "Performance": "성능",
+    "Convenience/Usability": "사용 편의",
+    "Cost": "가격/비용",
+    "Delivery/Install": "배송/설치",
+    "Durability": "내구성",
+    "Product Experience": "제품 경험",
+    "General": "제품 경험",
+}
+
+
+def _localize_aspect_label(label: str) -> str:
+    clean = _safe_text(label).strip()
+    if not clean:
+        return "제품 경험"
+    return ASPECT_LABEL_KO.get(clean, clean)
+
+
+def _issue_strength_for_card(
+    working_selected: pd.Series,
+    sentiment_label: str,
+    inquiry_flag: bool,
+    keywords: list[str],
+) -> tuple[str, float]:
+    score = 0.28
+    if sentiment_label == "negative":
+        score += 0.22
+    elif sentiment_label == "positive":
+        score += 0.16
+    else:
+        score += 0.1
+
+    signal_strength = _safe_text(working_selected.get("signal_strength", working_selected.get("display_signal_strength", ""))).lower()
+    if signal_strength == "strong":
+        score += 0.16
+    elif signal_strength == "medium":
+        score += 0.09
+    elif signal_strength == "weak":
+        score += 0.03
+
+    if inquiry_flag:
+        score += 0.06
+    if _truthy(working_selected.get("nlp_is_quantitative")) or _truthy(working_selected.get("numeric_flag")):
+        score += 0.04
+
+    cluster_size = float(pd.to_numeric(working_selected.get("cluster_size", 1), errors="coerce") or 1.0)
+    score += min(0.14, cluster_size / 180.0)
+
+    likes = float(pd.to_numeric(working_selected.get(COL_LIKES, working_selected.get("like_count", 0)), errors="coerce") or 0.0)
+    score += min(0.08, likes / 300.0)
+
+    if keywords:
+        score += 0.05
+    if len(keywords) >= 3:
+        score += 0.03
+
+    text_blob = " ".join(
+        [
+            _safe_text(working_selected.get(COL_ORIGINAL, "")),
+            _safe_text(working_selected.get(COL_TRANSLATION, "")),
+            _safe_text(working_selected.get("cleaned_text", "")),
+        ]
+    ).lower()
+    severe_markers = ["고장", "수리", "환불", "불량", "최악", "소음", "진동", "누수", "문제"]
+    if any(marker in text_blob for marker in severe_markers):
+        score += 0.07
+
+    score = max(0.05, min(0.99, score))
+    if score >= 0.72:
+        return "높음", score
+    if score >= 0.52:
+        return "중간", score
+    return "보통", score
+
+
 def _refine_aspect_label(aspect_label: str, working_selected: pd.Series, keywords: list[str], display_text: str) -> str:
     label = _safe_text(aspect_label).strip()
     if not label:
@@ -2942,10 +3009,18 @@ def _render_representative_nlp_panel(working_selected: pd.Series, sentiment_name
     sentiment_map = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸"}
     sentiment_label = sentiment_map.get(sentiment_value, sentiment_value)
     ratio = _confidence_ratio_for_card(working_selected, sentiment_value)
-    score_text = f"{int(round(ratio * 100))}%"
+    score_pct = int(round(ratio * 100))
+    score_text = f"{score_pct}%"
     keywords = _extract_card_keywords(working_selected, sentiment_value, limit=5)
     inquiry_flag = _infer_inquiry_flag(working_selected, display_text)
     quantitative_flag = _infer_quantitative_flag(working_selected, display_text)
+    issue_strength_label, issue_strength_score = _issue_strength_for_card(
+        working_selected=working_selected,
+        sentiment_label=sentiment_value,
+        inquiry_flag=inquiry_flag,
+        keywords=keywords,
+    )
+    localized_aspect_label = _localize_aspect_label(aspect_label)
 
     reason_candidates = [
         _safe_text(working_selected.get("nlp_sentiment_reason", "")),
@@ -3016,6 +3091,8 @@ def _render_representative_nlp_panel(working_selected: pd.Series, sentiment_name
             <div class="rep-ai-progress-fill" style="width:{ratio * 100:.1f}%; background:{fill_color};"></div>
           </div>
           <div class="rep-ai-flags">
+            <span class="rep-ai-flag">분류신뢰도: {score_pct}%</span>
+            <span class="rep-ai-flag">이슈강도: {issue_strength_label} ({int(round(issue_strength_score * 100))}%)</span>
             <span class="rep-ai-flag">문의: {str(inquiry_flag).lower()}</span>
             <span class="rep-ai-flag">수치적질문: {str(quantitative_flag).lower()}</span>
           </div>
@@ -3030,7 +3107,7 @@ def _render_representative_nlp_panel(working_selected: pd.Series, sentiment_name
           <div class="rep-ai-sec">
             <div class="rep-ai-label">토픽 · 감성</div>
             <div class="rep-ai-topic">
-              <span class="rep-ai-topic-title">{html.escape(aspect_label)}</span>
+              <span class="rep-ai-topic-title">{html.escape(localized_aspect_label)}</span>
               <span class="rep-ai-topic-sent">{sentiment_label}</span>
             </div>
           </div>
@@ -3076,6 +3153,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             display_text = original_text if is_korean else (translation or original_text)
             rough_keywords = _extract_card_keywords(working_selected, sentiment_name, limit=5)
             aspect_label = _refine_aspect_label(raw_aspect_label, working_selected, rough_keywords, display_text)
+            aspect_label_display = _localize_aspect_label(aspect_label)
 
             insight_type_val = _safe_text(selected.get("insight_type", ""))
             product_val = _safe_text(selected.get("product", ""))
@@ -3085,7 +3163,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             # ============================================================
             # HEADER: 번호 + 토픽명 + 메타 배지
             # ============================================================
-            badge_html_parts = [f'<strong style="font-size:16px;">{idx + 1}. {aspect_label}</strong>']
+            badge_html_parts = [f'<strong style="font-size:16px;">{idx + 1}. {aspect_label_display}</strong>']
             if product_val:
                 badge_html_parts.append(f'<span class="voc-chip">{product_val}</span>')
             if cej_val and cej_val != "기타":
@@ -3835,6 +3913,8 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
                     "neutral_count": "중립", "total": "합계", "dominant_sentiment": "주요 감성",
                     "negative_rate": "부정 비율",
                 })
+                if "토픽" in display_topics.columns:
+                    display_topics["토픽"] = display_topics["토픽"].map(lambda x: _localize_aspect_label(_safe_text(x)))
                 sentiment_kr = {"positive": "긍정", "negative": "부정", "neutral": "중립"}
                 if "주요 감성" in display_topics.columns:
                     display_topics["주요 감성"] = display_topics["주요 감성"].map(lambda x: sentiment_kr.get(x, x))
