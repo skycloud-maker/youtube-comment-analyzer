@@ -21,3 +21,10 @@ def test_keyword_normalization_drops_reported_noise_terms():
     assert normalize_keyword("없이") == ""
     assert normalize_keyword("광고했다고") == ""
     assert normalize_keyword("유튜버") == ""
+
+
+def test_keyword_normalization_merges_topload_variants():
+    assert normalize_keyword("통돌") == "통돌이"
+    assert normalize_keyword("통돌이") == "통돌이"
+    assert normalize_keyword("통돌이는") == "통돌이"
+    assert normalize_keyword("통돌이로") == "통돌이"

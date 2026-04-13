@@ -15,6 +15,7 @@ KOREAN_STOPWORDS = {
     "같음", "같다", "같은", "때문", "정도", "하나", "둘", "셋", "이번", "저번", "오늘", "내일", "어제",
     "여기", "저기", "그냥요", "이런", "그런", "저런", "좀", "많이", "매우", "혹시", "아마", "일단",
     "그리고요", "그래요", "네", "아니요", "입니다", "있습니다", "없습니다", "하세요", "해요", "했음",
+    "그렇게", "정도의", "같아요", "않아", "않고", "없고", "있고",
 }
 
 ENGLISH_STOPWORDS = {
@@ -141,6 +142,21 @@ KEYWORD_TRANSLATIONS = {
     "draining": "배수",
 }
 
+KEYWORD_CANONICAL_ALIASES = {
+    # Top-loader variants
+    "통돌": "통돌이",
+    "통돌이세탁기": "통돌이",
+    "통돌세탁기": "통돌이",
+    "topload": "통돌이",
+    "top-loader": "통돌이",
+    "toploader": "통돌이",
+    # Drum variants
+    "드럼세탁기": "드럼",
+    "drumwasher": "드럼",
+    # Common normalized forms
+    "a/s": "as",
+}
+
 BUSINESS_KEEPWORDS = {
     "가격", "가격부담", "가성비", "배송", "설치", "사용성", "편의성", "세척", "건조성능", "세탁성능", "냄새",
     "소음", "진동", "발열", "고장", "불량", "문제", "누수", "환불", "반품", "수리", "고객지원", "전기세",
@@ -165,6 +181,7 @@ _NOISE_VERB_SUFFIXES = (
 
 # Korean particle/postposition suffixes — strip to get the root noun
 _KR_PARTICLE_SUFFIXES = (
+    "은", "는", "이", "가", "을", "를", "와", "과", "랑", "로", "도", "만",
     "님", "을", "를", "이", "가", "에서", "에게", "으로", "에는",
     "에도", "에서도", "이나", "이라", "이고", "이랑", "처럼", "만큼",
     "까지", "부터", "보다", "한테", "에서의", "으로도", "이면",
@@ -173,10 +190,16 @@ _KR_PARTICLE_SUFFIXES = (
 
 def _strip_kr_particles(token: str) -> str:
     """Strip Korean particles/postpositions to get the root noun."""
-    for suffix in _KR_PARTICLE_SUFFIXES:
-        if token.endswith(suffix) and len(token) > len(suffix) + 1:
-            return token[: -len(suffix)]
-    return token
+    stripped = token
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _KR_PARTICLE_SUFFIXES:
+            if stripped.endswith(suffix) and len(stripped) > len(suffix) + 1:
+                stripped = stripped[: -len(suffix)]
+                changed = True
+                break
+    return stripped
 
 
 def normalize_keyword(token: str) -> str:
@@ -186,6 +209,7 @@ def normalize_keyword(token: str) -> str:
     token = token.strip(".,!?()[]{}\"'`\u201c\u201d\u2018:;/-_")
     token = token.replace("\u2019", "")
     token = KEYWORD_TRANSLATIONS.get(token, token)
+    token = KEYWORD_CANONICAL_ALIASES.get(token, token)
     if token in STOPWORDS or token.isdigit():
         return ""
     # Suffix-based filtering (from Codex): catches compound words ending in noise suffixes
@@ -196,6 +220,7 @@ def normalize_keyword(token: str) -> str:
     # Strip Korean particles (e.g. 잇섭님→잇섭, 자가를→자가)
     stripped = _strip_kr_particles(token)
     if stripped != token:
+        stripped = KEYWORD_CANONICAL_ALIASES.get(stripped, stripped)
         # Re-check the stripped form against stopwords
         if stripped in STOPWORDS or stripped in BRAND_NOISE_TERMS:
             return ""
@@ -203,6 +228,7 @@ def normalize_keyword(token: str) -> str:
         if stripped in BUSINESS_KEEPWORDS:
             return stripped
         token = stripped
+    token = KEYWORD_CANONICAL_ALIASES.get(token, token)
     if len(token) < 2:
         return ""
     if re.search(r"[^a-z0-9\uac00-\ud7a3+/]", token):
