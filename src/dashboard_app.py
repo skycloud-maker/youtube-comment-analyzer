@@ -138,7 +138,9 @@ SESSION_DATA_BUNDLE_KEY = "dashboard_data_bundle"
 SESSION_DATA_MODE_KEY = "dashboard_data_mode"
 SESSION_DATA_SIGNATURE_KEY = "dashboard_data_signature"
 SESSION_LAST_RUN_RESULT_KEY = "dashboard_last_run_result"
+ANALYSIS_ALL_MARKET_CODE = "ALL"
 ANALYSIS_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("전체(20개국)", ANALYSIS_ALL_MARKET_CODE),
     ("한국", "KR"),
     ("미국", "US"),
     ("캐나다", "CA"),
@@ -538,34 +540,54 @@ def _set_data_mode(mode: str, *, force_refresh: bool = False) -> None:
     st.session_state[SESSION_DATA_SIGNATURE_KEY] = _expected_mode_signature(mode)
 
 
+def _analysis_target_regions(region: str) -> list[str]:
+    selected = str(region or "").strip().upper()
+    all_regions = [code for _, code in ANALYSIS_MARKET_OPTIONS if code != ANALYSIS_ALL_MARKET_CODE]
+    if selected == ANALYSIS_ALL_MARKET_CODE:
+        return all_regions
+    if selected in all_regions:
+        return [selected]
+    return ["KR"]
+
+
 def _run_real_analysis_action(keyword: str, max_videos: int, comments_per_video: int, language: str, region: str, output_prefix: str) -> tuple[bool, str]:
-    keyword_variants = _build_search_keyword_variants(keyword, language=language, region=region)
-    primary_keyword = keyword_variants[0] if keyword_variants else keyword
-    command = [
-        sys.executable,
-        "-m",
-        "src.main",
-        "run",
-        "--keyword",
-        primary_keyword,
-        "--max-videos",
-        str(max_videos),
-        "--comments-per-video",
-        str(comments_per_video),
-        "--region",
-        region,
-        "--output-prefix",
-        output_prefix,
-    ]
-    if len(keyword_variants) > 1:
-        command.extend(["--keywords", *keyword_variants[1:]])
-    if language and language.lower() not in LANGUAGE_NO_FILTER_MARKERS:
-        command.extend(["--language", language])
-    completed = subprocess.run(command, cwd=str(BASE_DIR), capture_output=True, text=True)
-    if completed.returncode != 0:
-        error_text = (completed.stderr or completed.stdout or "").strip()
-        return False, error_text[-1200:]
-    return True, (completed.stdout or "").strip()
+    target_regions = _analysis_target_regions(region)
+    run_logs: list[str] = []
+
+    for target_region in target_regions:
+        keyword_variants = _build_search_keyword_variants(keyword, language=language, region=target_region)
+        primary_keyword = keyword_variants[0] if keyword_variants else keyword
+        region_prefix = output_prefix if len(target_regions) == 1 else f"{output_prefix}_{target_region.lower()}"
+        command = [
+            sys.executable,
+            "-m",
+            "src.main",
+            "run",
+            "--keyword",
+            primary_keyword,
+            "--max-videos",
+            str(max_videos),
+            "--comments-per-video",
+            str(comments_per_video),
+            "--region",
+            target_region,
+            "--output-prefix",
+            region_prefix,
+        ]
+        if len(keyword_variants) > 1:
+            command.extend(["--keywords", *keyword_variants[1:]])
+        if language and language.lower() not in LANGUAGE_NO_FILTER_MARKERS:
+            command.extend(["--language", language])
+        completed = subprocess.run(command, cwd=str(BASE_DIR), capture_output=True, text=True)
+        if completed.returncode != 0:
+            error_text = (completed.stderr or completed.stdout or "").strip()
+            return False, f"[{target_region}] {error_text[-1200:]}"
+        stdout_tail = (completed.stdout or "").strip()[-200:]
+        run_logs.append(f"[{target_region}] 완료" + (f" | {stdout_tail}" if stdout_tail else ""))
+
+    if len(target_regions) > 1:
+        return True, f"전체 국가 실행 완료 ({len(target_regions)}개)\n" + "\n".join(run_logs)
+    return True, (run_logs[0] if run_logs else "실행 완료")
 
 
 def _normalize_query_text(value: str) -> str:
@@ -3666,14 +3688,31 @@ def main() -> None:
             run_max_videos = st.number_input("수집 영상 수", min_value=5, max_value=200, value=40, step=5)
             run_comments_per_video = st.number_input("영상당 댓글 수(0=전체)", min_value=0, max_value=2000, value=0, step=50)
             run_output_prefix = st.text_input("결과 파일 prefix", value="dashboard_live")
-            keyword_preview = _build_search_keyword_variants(
-                run_keyword,
-                language=run_language,
-                region=run_region,
-            ) if run_keyword.strip() else []
-            if keyword_preview:
-                st.caption("이번 실행 예상 검색 키워드")
-                st.code("\n".join(keyword_preview))
+            target_regions_preview = _analysis_target_regions(run_region)
+            if run_keyword.strip():
+                if run_region == ANALYSIS_ALL_MARKET_CODE:
+                    st.caption(f"전체 시장 실행: {len(target_regions_preview)}개 국가를 순차 실행합니다.")
+                    preview_lines: list[str] = []
+                    for region_code in target_regions_preview[:5]:
+                        variants = _build_search_keyword_variants(
+                            run_keyword,
+                            language=run_language,
+                            region=region_code,
+                        )
+                        if variants:
+                            preview_lines.append(f"[{region_code}] " + " | ".join(variants))
+                    if preview_lines:
+                        st.caption("예상 검색 키워드 예시(상위 5개 국가)")
+                        st.code("\n".join(preview_lines))
+                else:
+                    keyword_preview = _build_search_keyword_variants(
+                        run_keyword,
+                        language=run_language,
+                        region=run_region,
+                    )
+                    if keyword_preview:
+                        st.caption("이번 실행 예상 검색 키워드")
+                        st.code("\n".join(keyword_preview))
             if st.button("실분석 실행", width="stretch", type="secondary"):
                 if not run_keyword.strip():
                     st.warning("검색 키워드를 입력해 주세요.")

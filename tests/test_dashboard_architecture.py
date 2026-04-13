@@ -6,6 +6,8 @@ from src.collectors.video_search import VideoSearchCollector
 from src.config import VideoSelectionSettings
 from src.dashboard_app import (
     REQUIRED_RESULT_FILES,
+    ANALYSIS_ALL_MARKET_CODE,
+    _analysis_target_regions,
     _build_missing_data_message,
     _build_search_keyword_variants,
     _build_synthetic_sample_bundle,
@@ -152,3 +154,11 @@ def test_search_keyword_variants_expand_using_region_language(monkeypatch) -> No
     assert variants[0] == "가전제품"
     assert "appareils electromenagers" in variants
     assert "home appliances" in variants
+
+
+def test_analysis_target_regions_all_expands_to_market_list() -> None:
+    regions = _analysis_target_regions(ANALYSIS_ALL_MARKET_CODE)
+    assert len(regions) == 20
+    assert "KR" in regions
+    assert "US" in regions
+    assert ANALYSIS_ALL_MARKET_CODE not in regions
