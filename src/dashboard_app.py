@@ -2814,6 +2814,35 @@ def _infer_quantitative_flag(working_selected: pd.Series, display_text: str) -> 
 
 
 def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, limit: int = 5) -> list[str]:
+    card_keyword_noise = {
+        "이게", "그게", "저게", "문제나", "문제냐", "한달", "이번", "그냥", "진짜", "관련", "해당", "정도",
+        "남기는댓글", "왜그럴까요", "필요하면습득하고", "정보를전달해주면",
+    }
+    card_keyword_alias = {
+        "통돌": "통돌이",
+        "통돌이는": "통돌이",
+        "통돌이로": "통돌이",
+        "통돌이랑": "통돌이",
+        "as": "A/S",
+        "a/s": "A/S",
+        "티비": "TV",
+        "tv": "TV",
+    }
+
+    def _card_keyword(raw: Any) -> str:
+        token = normalize_keyword(raw)
+        if not token:
+            return ""
+        token = re.sub(r"(으로|로|은|는|이|가|을|를|와|과|랑|도|만)$", "", token)
+        token = card_keyword_alias.get(token, token)
+        if token.lower() in card_keyword_noise or token in card_keyword_noise:
+            return ""
+        if len(token) < 2:
+            return ""
+        if token.isdigit():
+            return ""
+        return token
+
     raw_keywords = working_selected.get("nlp_keywords", [])
     if isinstance(raw_keywords, str):
         try:
@@ -2821,7 +2850,7 @@ def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, lim
         except Exception:
             raw_keywords = [part.strip() for part in raw_keywords.split(",") if part.strip()]
     if isinstance(raw_keywords, list):
-        normalized = [normalize_keyword(item) for item in raw_keywords]
+        normalized = [_card_keyword(item) for item in raw_keywords]
         cleaned = [item for item in normalized if item]
         deduped = list(dict.fromkeys(cleaned))
         if deduped:
@@ -2841,61 +2870,156 @@ def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, lim
     if not ranked:
         return []
 
-    normalized_ranked = [normalize_keyword(keyword) for keyword in ranked]
+    normalized_ranked = [_card_keyword(keyword) for keyword in ranked]
     cleaned_ranked = [item for item in normalized_ranked if item]
     deduped_ranked = list(dict.fromkeys(cleaned_ranked))
     return deduped_ranked[:limit]
 
 
 def _build_video_context_insight(working_selected: pd.Series, sentiment_name: str, aspect_label: str, keywords: list[str]) -> str:
-    channel = _safe_text(working_selected.get("channel_title", ""))
-    insight_type = _safe_text(working_selected.get("insight_type", ""))
-    voc_items = _extract_voc_items(working_selected, sentiment_name)
-    voc_insight = _safe_text(voc_items[0].get("insight", "")) if voc_items else ""
-    keyword_hint = ", ".join(keywords[:3]) if keywords else "핵심 항목"
+    def _pick_variant(candidates: list[str], seed: str) -> str:
+        if not candidates:
+            return ""
+        idx = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % len(candidates)
+        return candidates[idx]
+
+    source_text = " ".join(
+        [
+            _safe_text(working_selected.get(COL_ORIGINAL, "")),
+            _safe_text(working_selected.get(COL_TRANSLATION, "")),
+            _safe_text(working_selected.get("cleaned_text", "")),
+        ]
+    ).strip()
+    lowered = source_text.lower()
     cej = _safe_text(working_selected.get(COL_CEJ, "")).strip() or "사용"
     title = _safe_text(working_selected.get(COL_VIDEO_TITLE, "")).strip()
-    context_prefix = f"[{title}] " if title else ""
-
-    if voc_insight and not ("약한 신호" in voc_insight and sentiment_name in {"positive", "negative"}):
-        base = voc_insight
-    elif sentiment_name == "negative":
-        if any(marker in keyword_hint for marker in ["수리", "AS", "서비스"]):
-            base = f"{cej} 단계에서 서비스/수리 기대치와 실제 대응 간의 간극이 드러났고, {keyword_hint} 관련 불만이 반복됩니다."
-        elif any(marker in keyword_hint for marker in ["소음", "진동", "성능", "세탁"]):
-            base = f"{cej} 단계에서 체감 성능 이슈가 누적되며, {keyword_hint} 항목이 구매 후 만족도를 직접 깎는 신호가 보입니다."
-        else:
-            base = f"{cej} 단계에서 '{aspect_label}' 관련 불만이 반복되어, {keyword_hint} 이슈를 우선 점검할 필요가 있습니다."
-    elif sentiment_name == "positive":
-        if any(marker in keyword_hint for marker in ["편의", "세탁", "성능", "추천"]):
-            base = f"{cej} 단계에서 실사용 만족 포인트가 확인되며, {keyword_hint} 항목이 추천·전환 동인으로 작동합니다."
-        else:
-            base = f"{cej} 단계에서 '{aspect_label}' 강점이 반복 언급되어, {keyword_hint} 포인트가 긍정 경험을 견인합니다."
-    else:
-        base = f"{cej} 단계에서 '{aspect_label}' 관련 언급이 누적되고 있어, {keyword_hint}의 방향성(불만/만족) 추세 확인이 필요합니다."
-
+    channel = _safe_text(working_selected.get("channel_title", "")).strip()
+    context_head = []
+    if title:
+        context_head.append(f"'{title[:38]}{'…' if len(title) > 38 else ''}'")
     if channel:
-        return f"{context_prefix}[{channel}] 채널 맥락: {base}"
-    if insight_type and insight_type != "일반_의견":
-        return f"{context_prefix}[{insight_type}] {base}"
-    return f"{context_prefix}{base}"
+        context_head.append(f"{channel[:18]}{'…' if len(channel) > 18 else ''} 채널")
+    context_prefix = " / ".join(context_head)
+    context_prefix = f"{context_prefix} 기준, " if context_prefix else ""
+
+    family_rules = [
+        (["구독", "가입", "권유", "할부", "해지", "위약금", "판매"], "구독/판매 프로세스", "구매 전환 신뢰"),
+        (["as", "a/s", "수리", "서비스", "기사", "출장", "보증", "연락"], "A/S·수리 대응", "서비스 신뢰"),
+        (["소음", "진동", "탈수", "세척", "건조", "냉각", "성능"], "핵심 성능 체감", "사용 만족"),
+        (["가격", "비용", "비싸", "전기세"], "가격/비용 인식", "구매 장벽"),
+        (["배송", "설치", "기사방문"], "배송·설치 경험", "초기 경험 만족"),
+        (["불편", "무겁", "허리", "조작", "꺼내"], "사용 편의", "반복 사용 의향"),
+    ]
+    family, risk = (f"{_localize_aspect_label(aspect_label)} 이슈", "의사결정") if aspect_label else ("제품 경험 이슈", "의사결정")
+    for markers, mapped_family, mapped_risk in family_rules:
+        if any(marker in lowered for marker in markers):
+            family, risk = mapped_family, mapped_risk
+            break
+
+    evidence = ""
+    if source_text:
+        candidates = [part.strip() for part in re.split(r"[.!?\n]", source_text) if part.strip()]
+        keyword_seed = [k for k in keywords if k]
+        for sentence in candidates:
+            low = sentence.lower()
+            if any(k.lower() in low for k in keyword_seed[:3]):
+                evidence = sentence
+                break
+        if not evidence and candidates:
+            evidence = candidates[0]
+        if len(evidence) > 38:
+            evidence = evidence[:35].rstrip() + "..."
+
+    seed = "|".join(
+        [
+            _safe_text(working_selected.get("comment_id", "")),
+            _safe_text(working_selected.get("video_id", "")),
+            sentiment_name,
+            family,
+        ]
+    )
+    mention = f"'{evidence}'" if evidence else "반복 표현"
+    if sentiment_name == "negative":
+        variants = [
+            f"{context_prefix}{cej} 단계에서 {family} 불만이 반복되고, {mention} 맥락이 {risk} 저하 신호로 보입니다.",
+            f"{context_prefix}핵심 쟁점은 {family}이며, {mention} 사례가 누적돼 {risk} 리스크가 커지는 흐름입니다.",
+            f"{context_prefix}{family} 이슈가 단발성이 아니라 반복 패턴으로 관측됩니다. 특히 {mention} 표현이 대표적입니다.",
+        ]
+    elif sentiment_name == "positive":
+        variants = [
+            f"{context_prefix}{cej} 단계에서 {family} 강점이 확인되며, {mention} 언급이 {risk} 개선에 기여합니다.",
+            f"{context_prefix}{family} 관련 긍정 경험이 반복되고, {mention} 포인트가 추천 동인으로 작동합니다.",
+            f"{context_prefix}{mention} 맥락에서 {family} 만족 신호가 분명해, {risk} 측면의 강점으로 해석됩니다.",
+        ]
+    else:
+        variants = [
+            f"{context_prefix}{cej} 단계에서 {family} 관련 의견이 누적되고 있어, {mention} 쟁점의 방향성 확인이 필요합니다.",
+            f"{context_prefix}{mention} 사례를 포함해 {family} 이슈가 혼재되어 있어 후속 추적이 필요합니다.",
+            f"{context_prefix}{family} 관련 반응이 갈리고 있어, {mention} 근거 중심의 추가 판별이 필요합니다.",
+        ]
+    return _pick_variant(variants, seed)
 
 
 def _build_resolution_point(sentiment_name: str, keywords: list[str], inquiry_flag: bool) -> str:
+    def _pick_variant(candidates: list[str], seed: str) -> str:
+        if not candidates:
+            return ""
+        idx = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % len(candidates)
+        return candidates[idx]
+
     focus = ", ".join(keywords[:3]) if keywords else "핵심 이슈"
+    lowered_focus = focus.lower()
+    seed = f"{sentiment_name}|{focus}|{str(inquiry_flag).lower()}"
+
     if sentiment_name == "negative":
         if inquiry_flag:
-            return f"{focus} 관련 FAQ/고정댓글/챗봇 답변을 먼저 정교화하고, 반복 불만은 AS 프로세스 및 제품 개선 백로그로 즉시 연결하세요."
-        if any(token in focus for token in ["수리", "AS", "서비스"]):
-            return f"{focus} 건은 접수-진단-방문-완료 리드타임을 분해해 병목을 먼저 제거하고, 재발 유형은 원인코드로 묶어 주간 재발률을 관리하세요."
-        if any(token in focus for token in ["소음", "진동", "세탁", "성능"]):
-            return f"{focus} 이슈는 사용 조건(모드/용량/설치 상태)별 재현 테스트를 우선 수행하고, 확인된 조건부터 제품·가이드·콘텐츠 개선 액션으로 연결하세요."
-        return f"{focus}의 원인 분류(제품/설치/서비스)를 먼저 나눈 뒤, 상위 케이스부터 담당 조직별 개선 액션을 주 단위로 추적하세요."
+            variants = [
+                f"{focus} 질문은 답변 SLA(예: 24시간)와 표준 답변 템플릿을 먼저 만들고, 미해결 문의는 주간 이슈 백로그로 자동 이관하세요.",
+                f"{focus} 관련 문의 흐름을 FAQ·고정댓글·챗봇 응답으로 통합해 1차 해소율을 올리고, 반복 질문은 제품/정책 개선 항목으로 분리하세요.",
+            ]
+            return _pick_variant(variants, seed)
+        if any(token in lowered_focus for token in ["구독", "가입", "권유", "할부", "해지", "위약금", "판매"]):
+            variants = [
+                f"{focus} 건은 판매/권유 스크립트를 먼저 점검하고, 해지·위약금 안내 문구를 구매 전 단계에 명시해 오해를 줄이세요.",
+                f"{focus} 이슈는 매니저 권유 강도·약관 고지 시점·해지 안내 가시성을 분리 점검하고, 민원 다발 구간부터 개선 우선순위를 잡으세요.",
+            ]
+            return _pick_variant(variants, seed)
+        if any(token in lowered_focus for token in ["수리", "as", "서비스", "기사", "출장", "보증"]):
+            variants = [
+                f"{focus} 건은 접수-배정-방문-완료 리드타임을 분해해 병목 구간을 제거하고, 재발 유형은 원인코드 기준으로 주간 관리하세요.",
+                f"{focus} 이슈는 기사 배정 지연/재방문율/부품 대기시간을 핵심 지표로 두고, 상위 불만 유형부터 즉시 개선 액션을 붙이세요.",
+            ]
+            return _pick_variant(variants, seed)
+        if any(token in lowered_focus for token in ["소음", "진동", "세탁", "건조", "성능", "냉각"]):
+            variants = [
+                f"{focus} 이슈는 사용 조건(모드·용량·설치 상태)별 재현 테스트를 먼저 수행하고, 재현 케이스를 기준으로 제품/가이드 개선을 병행하세요.",
+                f"{focus} 관련 불만은 실제 사용 환경 데이터와 결합해 원인군을 나눈 뒤, 빈도 높은 조건부터 펌웨어·가이드·콘텐츠 개선으로 연결하세요.",
+            ]
+            return _pick_variant(variants, seed)
+        variants = [
+            f"{focus} 원인을 제품/설치/서비스/정책으로 먼저 분류하고, 상위 케이스부터 담당 조직과 마감일을 지정해 추적하세요.",
+            f"{focus} 이슈는 단일 액션보다 원인군별 액션이 필요합니다. 재발률·해결시간·만족도 지표를 함께 운영하세요.",
+        ]
+        return _pick_variant(variants, seed)
+
     if sentiment_name == "positive":
-        if any(token in focus for token in ["편의", "추천", "만족"]):
-            return f"{focus} 강점을 구매 전환 구간(썸네일/설명란/고정댓글/비교표)에 일관되게 배치해 전환 포인트로 확장하세요."
-        return f"{focus} 강점을 영상 설명란·썸네일·후속 콘텐츠에 일관되게 재노출해 전환 포인트로 확장하세요."
-    return f"{focus} 관련 반응을 주차별로 모니터링하고, 긍정/부정 전환 신호가 커지면 즉시 대응 플로우를 붙이세요."
+        if any(token in lowered_focus for token in ["편의", "추천", "만족", "성능"]):
+            variants = [
+                f"{focus} 강점을 썸네일/설명란/비교표/후속 영상에 일관되게 재노출해 전환 메시지로 확장하세요.",
+                f"{focus} 포인트를 구매 직전 콘텐츠(FAQ, 고정댓글, 숏폼)에도 연결해 실제 전환률 개선으로 이어지게 만드세요.",
+            ]
+            return _pick_variant(variants, seed)
+        variants = [
+            f"{focus} 긍정 신호를 유지하려면 핵심 강점 문구를 채널 전 구간에 통일하고, 동일 포맷의 후기 사례를 계속 확보하세요.",
+            f"{focus} 장점을 재사용 가능한 메시지로 표준화해 캠페인/상세페이지/영상 후속편까지 연결하세요.",
+        ]
+        return _pick_variant(variants, seed)
+
+    variants = [
+        f"{focus} 반응은 의견이 갈리므로 주차별 추세와 전환율 영향을 함께 모니터링하고, 임계치 초과 시 즉시 대응 플로우를 가동하세요.",
+        f"{focus} 이슈는 중립 의견이 섞여 있으니 샘플을 추가 수집해 판별 정확도를 높이고, 반복 패턴부터 선제 대응하세요.",
+    ]
+    return _pick_variant(variants, seed)
 
 
 ASPECT_LABEL_KO = {
