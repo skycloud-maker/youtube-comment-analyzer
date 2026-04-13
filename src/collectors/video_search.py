@@ -87,14 +87,15 @@ class VideoSearchCollector:
                 break
 
         enriched = self._enrich_videos(run_id, config, results)
-        selected = self._apply_video_selection_policy(enriched)
-        if not selected and enriched:
-            self.logger.warning(
-                "Video selection policy filtered out all videos; falling back to unfiltered results",
-                extra={"run_id": run_id, "stage": "search_filter"},
-            )
-            selected = enriched
-        selected = selected[: config.max_videos]
+        annotated = self._apply_video_selection_policy(enriched)
+        # Keep the full collected universe (up to max_videos) and apply narrowing in dashboard filters.
+        selected = sorted(
+            annotated,
+            key=lambda item: (
+                int(item.get("search_rank") or 999999),
+                -int(item.get("comment_count") or 0),
+            ),
+        )[: config.max_videos]
         write_json(cache_path, selected)
         return selected
 
@@ -155,8 +156,8 @@ class VideoSearchCollector:
                 item["selection_score"] = float(self._score_video(item, product_match=False, target_brand=False, preferred_channel=False))
             return sorted(videos, key=self._sort_key)
 
-        selected: list[dict[str, Any]] = []
-        dropped = 0
+        annotated: list[dict[str, Any]] = []
+        relevant_count = 0
         for item in videos:
             title = str(item.get("title") or "")
             description = str(item.get("description") or "")
@@ -181,14 +182,13 @@ class VideoSearchCollector:
             elif self.selection_policy.exclude_competitor_brands and competitor_brand and not target_brand:
                 keep = False
 
-            if not keep:
-                dropped += 1
-                continue
-
-            item["is_lg_relevant_video"] = True
+            if keep:
+                relevant_count += 1
+            item["is_lg_relevant_video"] = bool(keep)
             item["lg_target_brand_hit"] = bool(target_brand)
             item["lg_product_hit"] = bool(product_match)
             item["lg_preferred_channel_hit"] = bool(preferred_channel)
+            item["video_selection_excluded"] = not keep
             item["selection_score"] = float(
                 self._score_video(
                     item,
@@ -197,15 +197,15 @@ class VideoSearchCollector:
                     preferred_channel=preferred_channel,
                 )
             )
-            selected.append(item)
+            annotated.append(item)
 
-        if dropped:
+        if annotated:
             self.logger.info(
-                "Video selection policy kept %d/%d videos",
-                len(selected),
+                "Video relevance annotation: %d/%d videos marked relevant",
+                relevant_count,
                 len(videos),
             )
-        return sorted(selected, key=self._sort_key)
+        return sorted(annotated, key=self._sort_key)
 
     @staticmethod
     def _contains_any(text: str, terms: list[str]) -> bool:

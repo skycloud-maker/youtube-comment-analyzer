@@ -9,6 +9,8 @@ import html
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +26,6 @@ import matplotlib.font_manager as fm
 import pandas as pd
 import streamlit as st
 
-from src.analytics.comment_analysis import analyze_comment_with_context
 from src.analytics.keywords import BUSINESS_KEEPWORDS, build_keyword_counter, filter_business_keywords, normalize_keyword, tokenize_text
 from src.config import load_yaml_settings_optional
 from src.utils.translation import translate_to_korean
@@ -133,6 +134,10 @@ COL_REMOVED = "\uC81C\uAC70 \uC0AC\uC720"
 COL_CONTEXT = "\uC5F0\uAD00 \uB9E5\uB77D"
 COL_CONTEXT_TRANSLATION = "\uC5F0\uAD00 \uB9E5\uB77D \uBC88\uC5ED"
 COL_SENTIMENT_CODE = "sentiment_code"
+SESSION_DATA_BUNDLE_KEY = "dashboard_data_bundle"
+SESSION_DATA_MODE_KEY = "dashboard_data_mode"
+SESSION_DATA_SIGNATURE_KEY = "dashboard_data_signature"
+SESSION_LAST_RUN_RESULT_KEY = "dashboard_last_run_result"
 
 def _build_empty_buckets() -> dict[str, list[pd.DataFrame]]:
     return {key: [] for key, _ in DASHBOARD_DATASETS}
@@ -236,6 +241,276 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
 @st.cache_resource
 def get_dashboard_data_resource():
     return load_dashboard_data()
+
+
+REQUIRED_RESULT_FILES = ("videos_normalized.parquet", "comments.parquet")
+SAMPLE_MAX_RUNS = 6
+SAMPLE_MAX_ROWS = {
+    "comments": 3000,
+    "analysis_comments": 3000,
+    "opinion_units": 4500,
+    "videos": 400,
+}
+
+
+def _empty_dashboard_bundle() -> dict[str, pd.DataFrame]:
+    return {key: pd.DataFrame() for key, _ in DASHBOARD_DATASETS}
+
+
+def _run_dir_has_required_outputs(run_dir: Path) -> bool:
+    return all((run_dir / filename).exists() or (run_dir / Path(filename).with_suffix(".csv")).exists() for filename in REQUIRED_RESULT_FILES)
+
+
+def _real_ready_run_dirs() -> list[Path]:
+    return [run_dir for run_dir in _iter_dashboard_run_dirs() if _run_dir_has_required_outputs(run_dir)]
+
+
+def _build_missing_data_message() -> str:
+    run_dirs = _iter_dashboard_run_dirs()
+    required_text = ", ".join(REQUIRED_RESULT_FILES)
+    if not run_dirs:
+        return f"`{PROCESSED_DIR}` 아래에 run 폴더가 없습니다. 먼저 분석을 실행해 `{required_text}` 파일을 생성해 주세요."
+
+    missing_rows: list[str] = []
+    for run_dir in run_dirs[-5:]:
+        missing = [name for name in REQUIRED_RESULT_FILES if not ((run_dir / name).exists() or (run_dir / Path(name).with_suffix('.csv')).exists())]
+        if missing:
+            missing_rows.append(f"- {run_dir.name}: {', '.join(missing)} 누락")
+    if missing_rows:
+        return "결과 파일이 불완전합니다.\n" + "\n".join(missing_rows)
+    return f"결과 파일을 찾지 못했습니다. `{required_text}` 파일 존재 여부를 확인해 주세요."
+
+
+def _build_synthetic_sample_bundle() -> dict[str, pd.DataFrame]:
+    comments = pd.DataFrame(
+        [
+            {
+                "run_id": "sample_run_001",
+                "comment_id": "c1",
+                "video_id": "v1",
+                "product": "세탁기",
+                "region": "KR",
+                "title": "세탁기 비교 리뷰",
+                "channel_title": "샘플 리뷰 채널",
+                "video_url": "https://www.youtube.com/watch?v=sample_v1",
+                "text_display": "세탁 소음이 커서 밤에는 사용이 어렵습니다.",
+                "cleaned_text": "세탁 소음이 커서 밤에는 사용이 어렵습니다.",
+                "like_count": 34,
+                "comment_validity": "valid",
+                "sentiment_label": "negative",
+                "signal_strength": "strong",
+                "classification_type": "complaint",
+                "confidence_level": "high",
+                "classification_reason": "소음 불만이 명확함",
+                "brand_label": "LG",
+                "nlp_is_inquiry": False,
+                "is_lg_relevant_video": True,
+                "video_lg_relevance_score": 0.83,
+            },
+            {
+                "run_id": "sample_run_001",
+                "comment_id": "c2",
+                "video_id": "v1",
+                "product": "세탁기",
+                "region": "KR",
+                "title": "세탁기 비교 리뷰",
+                "channel_title": "샘플 리뷰 채널",
+                "video_url": "https://www.youtube.com/watch?v=sample_v1",
+                "text_display": "이 모델 에너지 효율은 어떤가요?",
+                "cleaned_text": "이 모델 에너지 효율은 어떤가요?",
+                "like_count": 12,
+                "comment_validity": "valid",
+                "sentiment_label": "neutral",
+                "signal_strength": "weak",
+                "classification_type": "informational",
+                "confidence_level": "medium",
+                "classification_reason": "질문형 댓글",
+                "brand_label": "미언급",
+                "nlp_is_inquiry": True,
+                "is_lg_relevant_video": True,
+                "video_lg_relevance_score": 0.83,
+            },
+            {
+                "run_id": "sample_run_001",
+                "comment_id": "c3",
+                "video_id": "v2",
+                "product": "냉장고",
+                "region": "US",
+                "title": "Best refrigerator review",
+                "channel_title": "Sample Appliance Lab",
+                "video_url": "https://www.youtube.com/watch?v=sample_v2",
+                "text_display": "Cooling performance is great and design is clean.",
+                "cleaned_text": "Cooling performance is great and design is clean.",
+                "like_count": 22,
+                "comment_validity": "valid",
+                "sentiment_label": "positive",
+                "signal_strength": "strong",
+                "classification_type": "preference",
+                "confidence_level": "high",
+                "classification_reason": "성능 만족",
+                "brand_label": "LG",
+                "nlp_is_inquiry": False,
+                "is_lg_relevant_video": False,
+                "video_lg_relevance_score": 0.42,
+            },
+        ]
+    )
+    videos = pd.DataFrame(
+        [
+            {
+                "run_id": "sample_run_001",
+                "video_id": "v1",
+                "product": "세탁기",
+                "region": "KR",
+                "title": "세탁기 비교 리뷰",
+                "channel_title": "샘플 리뷰 채널",
+                "video_url": "https://www.youtube.com/watch?v=sample_v1",
+                "comment_count": 120,
+                "is_lg_relevant_video": True,
+                "video_lg_relevance_score": 0.83,
+            },
+            {
+                "run_id": "sample_run_001",
+                "video_id": "v2",
+                "product": "냉장고",
+                "region": "US",
+                "title": "Best refrigerator review",
+                "channel_title": "Sample Appliance Lab",
+                "video_url": "https://www.youtube.com/watch?v=sample_v2",
+                "comment_count": 98,
+                "is_lg_relevant_video": False,
+                "video_lg_relevance_score": 0.42,
+            },
+        ]
+    )
+    opinion_units = pd.DataFrame(
+        [
+            {"run_id": "sample_run_001", "source_content_id": "c1", "inquiry_flag": False, "product": "세탁기", "region": "KR", "brand_mentioned": "LG", "cej_scene_code": "사용", "sentiment": "negative", "opinion_text": "세탁 소음이 큼"},
+            {"run_id": "sample_run_001", "source_content_id": "c2", "inquiry_flag": True, "product": "세탁기", "region": "KR", "brand_mentioned": "미언급", "cej_scene_code": "탐색", "sentiment": "neutral", "opinion_text": "에너지 효율 질문"},
+            {"run_id": "sample_run_001", "source_content_id": "c3", "inquiry_flag": False, "product": "냉장고", "region": "US", "brand_mentioned": "LG", "cej_scene_code": "사용", "sentiment": "positive", "opinion_text": "냉각 성능 만족"},
+        ]
+    )
+    quality_summary = pd.DataFrame(
+        [
+            {"comment_validity": "valid", "count": 3},
+            {"comment_validity": "excluded", "count": 0},
+        ]
+    )
+    nlp_inquiry_summary = comments[comments["nlp_is_inquiry"] == True][["comment_id", "cleaned_text"]].rename(columns={"cleaned_text": "text"})
+
+    bundle = _empty_dashboard_bundle()
+    bundle["comments"] = comments
+    bundle["analysis_comments"] = comments.copy()
+    bundle["videos"] = videos
+    bundle["quality_summary"] = quality_summary
+    bundle["opinion_units"] = opinion_units
+    bundle["nlp_inquiry_summary"] = nlp_inquiry_summary
+    return bundle
+
+
+@st.cache_data(show_spinner=False)
+def load_sample_dashboard_data() -> dict[str, pd.DataFrame]:
+    run_dirs = list(reversed(_real_ready_run_dirs()))[:SAMPLE_MAX_RUNS]
+    if not run_dirs:
+        return _build_synthetic_sample_bundle()
+
+    buckets = _build_empty_buckets()
+    for run_dir in run_dirs:
+        context = {"run_id": run_dir.name}
+        for key, filename in DASHBOARD_DATASETS:
+            frame = _read_frame(run_dir / filename)
+            if frame.empty:
+                continue
+            for column, value in context.items():
+                if column not in frame.columns:
+                    frame[column] = value
+            row_cap = SAMPLE_MAX_ROWS.get(key)
+            if row_cap is not None:
+                frame = frame.head(row_cap)
+            buckets[key].append(frame)
+
+    data = {
+        key: pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        for key, frames in buckets.items()
+    }
+    if data.get("comments", pd.DataFrame()).empty or data.get("videos", pd.DataFrame()).empty:
+        return _build_synthetic_sample_bundle()
+    return data
+
+
+def _clear_dashboard_caches() -> None:
+    load_dashboard_data.clear()
+    get_dashboard_data_resource.clear()
+    load_sample_dashboard_data.clear()
+
+
+def _expected_mode_signature(mode: str) -> str:
+    source_sig = _latest_signature()
+    return f"{mode}:{source_sig}"
+
+
+def _load_bundle_for_mode(mode: str, *, force_refresh: bool = False) -> dict[str, pd.DataFrame]:
+    if force_refresh:
+        _clear_dashboard_caches()
+    if mode == "sample":
+        return load_sample_dashboard_data()
+    return get_dashboard_data_resource()
+
+
+def _initialize_data_session_state() -> None:
+    requested_mode = ""
+    try:
+        requested_mode = str(st.query_params.get("data_mode", st.query_params.get("mode", ""))).strip().lower()
+    except Exception:
+        requested_mode = ""
+    default_mode = "real" if _real_ready_run_dirs() else "sample"
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        default_mode = "sample"
+    if requested_mode in {"sample", "lite"}:
+        default_mode = "sample"
+    elif requested_mode == "real":
+        default_mode = "real"
+
+    if SESSION_DATA_MODE_KEY not in st.session_state:
+        st.session_state[SESSION_DATA_MODE_KEY] = default_mode
+    if SESSION_DATA_BUNDLE_KEY not in st.session_state:
+        mode = st.session_state[SESSION_DATA_MODE_KEY]
+        bundle = _load_bundle_for_mode(mode, force_refresh=False)
+        st.session_state[SESSION_DATA_BUNDLE_KEY] = bundle
+        st.session_state[SESSION_DATA_SIGNATURE_KEY] = _expected_mode_signature(mode)
+
+
+def _set_data_mode(mode: str, *, force_refresh: bool = False) -> None:
+    bundle = _load_bundle_for_mode(mode, force_refresh=force_refresh)
+    st.session_state[SESSION_DATA_MODE_KEY] = mode
+    st.session_state[SESSION_DATA_BUNDLE_KEY] = bundle
+    st.session_state[SESSION_DATA_SIGNATURE_KEY] = _expected_mode_signature(mode)
+
+
+def _run_real_analysis_action(keyword: str, max_videos: int, comments_per_video: int, language: str, region: str, output_prefix: str) -> tuple[bool, str]:
+    command = [
+        sys.executable,
+        "-m",
+        "src.main",
+        "run",
+        "--keyword",
+        keyword,
+        "--max-videos",
+        str(max_videos),
+        "--comments-per-video",
+        str(comments_per_video),
+        "--language",
+        language,
+        "--region",
+        region,
+        "--output-prefix",
+        output_prefix,
+    ]
+    completed = subprocess.run(command, cwd=str(BASE_DIR), capture_output=True, text=True)
+    if completed.returncode != 0:
+        error_text = (completed.stderr or completed.stdout or "").strip()
+        return False, error_text[-1200:]
+    return True, (completed.stdout or "").strip()
 
 
 @st.cache_data(show_spinner=False)
@@ -431,31 +706,28 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     if needs_context_translation.any():
         working.loc[needs_context_translation, COL_CONTEXT_TRANSLATION] = working.loc[needs_context_translation, COL_CONTEXT].map(translate_to_korean)
 
-    def _reanalyze(row: pd.Series) -> pd.Series:
-        result = analyze_comment_with_context(
-            _safe_text(row.get(COL_ORIGINAL, "")),
-            validity=_safe_text(row.get("comment_validity", "valid")) or "valid",
-            exclusion_reason=_safe_text(row.get("exclusion_reason", "")) or None,
-            parent_comment=_safe_text(row.get(COL_CONTEXT, "")) or None,
-            context_comments=[_safe_text(row.get(COL_CONTEXT, ""))] if _safe_text(row.get(COL_CONTEXT, "")) else None,
-            is_reply=bool(_safe_text(row.get("parent_comment_id", ""))),
-            use_nlp=False,  # Dashboard에서는 LLM API 호출 방지 (과금 방지)
-        )
-        return pd.Series({
-            "display_sentiment": result.sentiment_label or "neutral",
-            "display_signal_strength": result.signal_strength,
-            "display_classification_type": result.classification_type,
-            "display_confidence_level": result.confidence_level,
-            "display_context_used": result.context_used,
-            "display_context_required": result.context_required_for_display,
-            "display_product_target": result.product_target or "",
-            "display_reason": result.reason,
-            "display_needs_review": result.needs_review,
-            "insight_type": result.insight_type,
-        })
-
-    analysis_df = working.apply(_reanalyze, axis=1)
-    working = pd.concat([working.reset_index(drop=True), analysis_df.reset_index(drop=True)], axis=1)
+    # Use pipeline outputs as the only comment-level analysis source.
+    # Dashboard must not re-run a separate NLP/rule path.
+    working["display_sentiment"] = (
+        working.get("sentiment_label", pd.Series("neutral", index=working.index))
+        .fillna("neutral")
+        .astype(str)
+        .str.lower()
+    )
+    working["display_signal_strength"] = working.get("signal_strength", pd.Series("", index=working.index)).fillna("").astype(str)
+    working["display_classification_type"] = working.get("classification_type", pd.Series("", index=working.index)).fillna("").astype(str)
+    working["display_confidence_level"] = working.get("confidence_level", pd.Series("", index=working.index)).fillna("").astype(str)
+    working["display_context_used"] = working.get("context_used", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+    working["display_context_required"] = working.get("context_required_for_display", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+    working["display_product_target"] = working.get("product_target", pd.Series("", index=working.index)).fillna("").astype(str)
+    working["display_reason"] = (
+        working.get("classification_reason", pd.Series("", index=working.index))
+        .fillna("")
+        .astype(str)
+    )
+    working["display_needs_review"] = working.get("needs_review", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+    if "insight_type" not in working.columns:
+        working["insight_type"] = ""
 
     if sentiment:
         working = working[working["display_sentiment"] == sentiment].copy()
@@ -2231,20 +2503,19 @@ def _truthy(value: Any) -> bool:
 
 
 def _infer_inquiry_flag(working_selected: pd.Series, display_text: str) -> bool:
-    for key in ["inquiry_flag", "is_inquiry", "question_flag"]:
+    # Layer 1(analysis pipeline)에서 확정한 inquiry 플래그만 사용한다.
+    for key in ["nlp_is_inquiry", "inquiry_flag", "is_inquiry", "question_flag"]:
         if key in working_selected.index and _truthy(working_selected.get(key)):
             return True
-    text_val = _safe_text(display_text).lower()
-    inquiry_markers = ["?", "문의", "어떻게", "가능한가", "가능할까요", "can i", "how do i", "how to"]
-    return any(marker in text_val for marker in inquiry_markers)
+    return False
 
 
 def _infer_quantitative_flag(working_selected: pd.Series, display_text: str) -> bool:
-    for key in ["quantitative_flag", "is_quantitative", "has_numeric", "numeric_flag"]:
+    # Layer 1(analysis pipeline)에서 전달된 수치성 플래그만 표시한다.
+    for key in ["nlp_is_quantitative", "quantitative_flag", "is_quantitative", "has_numeric", "numeric_flag"]:
         if key in working_selected.index and _truthy(working_selected.get(key)):
             return True
-    text_val = _safe_text(display_text)
-    return bool(re.search(r"\d+(\.\d+)?\s*(%|년|개월|주|일|시간|분|만원|원|kg|회|도|번)", text_val))
+    return False
 
 
 def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, limit: int = 5) -> list[str]:
@@ -3235,21 +3506,67 @@ def render_nlp_insights(data: dict[str, pd.DataFrame], filtered_comments: pd.Dat
 def main() -> None:
     st.set_page_config(page_title="가전 VoC Dashboard", layout="wide")
     apply_theme()
+    _initialize_data_session_state()
+    active_mode = st.session_state.get(SESSION_DATA_MODE_KEY, "real")
+    expected_signature = _expected_mode_signature(active_mode)
+    if st.session_state.get(SESSION_DATA_SIGNATURE_KEY) != expected_signature:
+        with st.spinner("최신 결과와 동기화 중…"):
+            _set_data_mode(active_mode, force_refresh=True)
 
-    if not st.session_state.get("_full_data_loaded", False) and not should_autoload_full_data():
-        st.markdown("## 가전 VoC Dashboard")
-        st.caption("클라우드 안정성을 위해 초기에는 데이터 로딩을 지연합니다.")
-        if st.button("대시보드 데이터 불러오기", type="primary", width="stretch"):
-            st.session_state["_full_data_loaded"] = True
-            st.rerun()
-        st.caption("자동 로딩이 필요하면 URL에 `?autoload=1`을 추가하세요.")
-        return
+    with st.sidebar:
+        st.markdown("### 데이터 모드")
+        st.caption(f"현재 모드: {'샘플 모드' if active_mode == 'sample' else '실데이터 모드'}")
+        col_sample, col_real = st.columns(2)
+        with col_sample:
+            if st.button("샘플 로드", width="stretch", type="secondary"):
+                _set_data_mode("sample", force_refresh=False)
+                st.rerun()
+        with col_real:
+            if st.button("실데이터 새로고침", width="stretch", type="primary"):
+                _set_data_mode("real", force_refresh=True)
+                st.rerun()
 
-    with st.spinner("데이터 로딩 중…"):
-        data = get_dashboard_data_resource()
+        with st.expander("실제 분석 실행", expanded=False):
+            run_keyword = st.text_input("검색 키워드", value="가전 리뷰")
+            run_region = st.selectbox("시장", ["KR", "US"], index=0)
+            run_language = st.selectbox("언어", ["ko", "en"], index=0)
+            run_max_videos = st.number_input("수집 영상 수", min_value=5, max_value=200, value=40, step=5)
+            run_comments_per_video = st.number_input("영상당 댓글 수(0=전체)", min_value=0, max_value=2000, value=0, step=50)
+            run_output_prefix = st.text_input("결과 파일 prefix", value="dashboard_live")
+            if st.button("실분석 실행", width="stretch", type="secondary"):
+                if not run_keyword.strip():
+                    st.warning("검색 키워드를 입력해 주세요.")
+                else:
+                    with st.spinner("실제 분석을 실행 중입니다..."):
+                        ok, message = _run_real_analysis_action(
+                            keyword=run_keyword.strip(),
+                            max_videos=int(run_max_videos),
+                            comments_per_video=int(run_comments_per_video),
+                            language=run_language,
+                            region=run_region,
+                            output_prefix=run_output_prefix.strip() or "dashboard_live",
+                        )
+                    if ok:
+                        st.session_state[SESSION_LAST_RUN_RESULT_KEY] = message
+                        _set_data_mode("real", force_refresh=True)
+                        st.success("실분석이 완료되어 실데이터 모드로 갱신했습니다.")
+                        st.rerun()
+                    else:
+                        st.error("실분석 실행 중 오류가 발생했습니다.")
+                        st.code(message)
+
+        if st.session_state.get(SESSION_LAST_RUN_RESULT_KEY):
+            st.caption("최근 실분석 실행 결과")
+            st.code(str(st.session_state[SESSION_LAST_RUN_RESULT_KEY])[:1200])
+
+    data = st.session_state.get(SESSION_DATA_BUNDLE_KEY, _empty_dashboard_bundle())
 
     comments_raw = data.get("comments", pd.DataFrame()).copy()
     videos_raw = data.get("videos", pd.DataFrame()).copy()
+    if active_mode == "real" and (comments_raw.empty or videos_raw.empty):
+        st.warning(_build_missing_data_message())
+        st.info("좌측 사이드바의 `샘플 로드`를 눌러 샘플 모드로 빠르게 UI를 검증할 수 있습니다.")
+        return
     comments_scored, videos_df = ensure_lg_relevance_columns(comments_raw, videos_raw)
     comments_df = add_localized_columns(comments_scored)
     if comments_df.empty:
@@ -3263,6 +3580,7 @@ def main() -> None:
         '<div style="display:flex; align-items:center; gap:14px; margin-bottom:4px;">'
         '<div style="font-size:28px; font-weight:800; color:#1e293b; letter-spacing:-0.02em;">가전 VoC Dashboard</div>'
         f'<span style="display:inline-block; padding:3px 10px; border-radius:999px; background:#eff6ff; color:#3b82f6; font-size:11px; font-weight:700; letter-spacing:0.03em;">{DASHBOARD_BUILD_LABEL}</span>'
+        f'<span style="display:inline-block; padding:3px 10px; border-radius:999px; background:{("#dcfce7" if active_mode == "real" else "#ffedd5")}; color:{("#166534" if active_mode == "real" else "#9a3412")}; font-size:11px; font-weight:700; letter-spacing:0.03em;">{"REAL" if active_mode == "real" else "SAMPLE"}</span>'
         '</div>',
         unsafe_allow_html=True,
     )

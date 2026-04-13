@@ -48,7 +48,10 @@ def test_video_selection_excludes_competitor_brand_when_target_missing() -> None
     selected = collector._apply_video_selection_policy(videos)
     selected_ids = [item["video_id"] for item in selected]
     assert "a" in selected_ids
-    assert "b" not in selected_ids
+    assert "b" in selected_ids
+    flags = {item["video_id"]: item["is_lg_relevant_video"] for item in selected}
+    assert flags["a"] is True
+    assert flags["b"] is False
 
 
 def test_video_selection_keeps_preferred_channel_even_without_target_brand() -> None:
@@ -88,5 +91,7 @@ def test_video_selection_keeps_preferred_channel_even_without_target_brand() -> 
     selected = collector._apply_video_selection_policy(videos)
     selected_ids = [item["video_id"] for item in selected]
     assert "preferred" in selected_ids
-    assert "generic" not in selected_ids
-
+    assert "generic" in selected_ids
+    flags = {item["video_id"]: item["is_lg_relevant_video"] for item in selected}
+    assert flags["preferred"] is True
+    assert flags["generic"] is False

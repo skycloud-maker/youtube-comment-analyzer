@@ -43,10 +43,10 @@ class IngestPipeline:
                     seen_video_ids.add(vid)
                     all_videos.append(v)
             self.logger.info("Keyword '%s': %d videos (total unique: %d)", kw, len(kw_results), len(all_videos))
+        # Preserve collection-time video universe order; dashboard handles narrowing/filtering.
         all_videos = sorted(
             all_videos,
             key=lambda item: (
-                -float(item.get("selection_score") or 0.0),
                 int(item.get("search_rank") or 999999),
                 -int(item.get("comment_count") or 0),
             ),

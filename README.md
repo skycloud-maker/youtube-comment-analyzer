@@ -142,6 +142,36 @@ python -m src.main analyze --run-id <RUN_ID>
 python -m src.main export --run-id <RUN_ID> --output-prefix samsung_fridge
 ```
 
+## Dashboard Modes (Sample vs Real)
+
+Streamlit dashboard now has two intentionally separated flows:
+
+- `샘플 로드`:
+  - 빠른 UI/차트/필터 검증용
+  - 최신 run 일부를 축약 로드하거나, 결과 파일이 없으면 내장 synthetic sample을 로드
+  - 긴 수집/분석 작업 없이 즉시 확인 가능
+- `실데이터 새로고침`:
+  - 실제 `data/processed/*` 결과를 다시 읽어 최신 상태 반영
+  - 캐시를 무효화한 뒤 재로드
+- `실분석 실행`:
+  - 대시보드에서 `python -m src.main run ...`을 실행해 실제 수집+분석 수행
+  - 완료 후 실데이터 모드로 자동 갱신
+
+### Startup loading behavior
+
+- 결과 파일(`videos_normalized.parquet`, `comments.parquet`)이 존재하면 앱 시작 시 자동 로딩합니다.
+- 데이터는 `st.session_state`에 실제 bundle(dict[str, DataFrame]) 자체를 저장해 rerun 시 유지합니다.
+- 버튼은 보조 동작(샘플 전환/실데이터 새로고침/실분석 실행)이며, 버튼 내부 임시 변수에만 의존하지 않습니다.
+- 실데이터 모드에서 필수 결과 파일이 없으면 누락 파일명을 포함한 경고를 표시합니다.
+
+### NLP responsibility split
+
+- Layer 1 (`src/pipelines/analytics_pipeline.py` + `src/analytics/*`):
+  - 댓글 단위 분류(감성, 문의 여부 등) 단일 기준 산출
+- Layer 2 (`src/dashboard_app.py`):
+  - 영상 맥락 인사이트/해결 포인트 생성 및 시각화
+  - 댓글 단위 재분석 금지 (대시보드 내부 별도 NLP 분기 제거)
+
 ## Outputs
 - `data/raw/<run_id>/...`: 엔드포인트별 원본 JSON 감사 로그
 - `data/processed/<run_id>/videos_raw.parquet`: 수집 비디오 원본 테이블
@@ -176,6 +206,11 @@ python -m src.main export --run-id <RUN_ID> --output-prefix samsung_fridge
 ## Testing
 ```bash
 pytest
+```
+
+대시보드 아키텍처 관련 스모크 테스트만 빠르게 돌리려면:
+```bash
+pytest tests/test_dashboard_architecture.py tests/test_streamlit_ui_smoke.py
 ```
 
 ## Troubleshooting
