@@ -64,3 +64,5 @@ yt_client_*/
 _tmp/
 data/dashboard_cache/dashboard_bundle.pkl
 data/dashboard_cache/dashboard_bundle_meta.json
+
+data/dashboard_cache/last_snapshot_pref.json
