@@ -139,6 +139,13 @@ class CommentAnalysisResult:
     nlp_language: str | None = None
     nlp_provider: str | None = None
     nlp_model: str | None = None
+    nlp_core_points: list[str] = field(default_factory=list)
+    nlp_context_tags: list[str] = field(default_factory=list)
+    nlp_similarity_keys: list[str] = field(default_factory=list)
+    nlp_insight_summary: str | None = None
+    nlp_confidence_factors: list[str] = field(default_factory=list)
+    nlp_confidence_breakdown: dict[str, float] = field(default_factory=dict)
+    nlp_sentiment_intensity: float | None = None
 
 
 def _contains_any(text: str, markers: list[str]) -> bool:
@@ -461,6 +468,13 @@ def analyze_comment_with_context(
         nlp_language=nlp_fields.get("nlp_language"),
         nlp_provider=nlp_fields.get("nlp_provider"),
         nlp_model=nlp_fields.get("nlp_model"),
+        nlp_core_points=nlp_fields.get("nlp_core_points", []),
+        nlp_context_tags=nlp_fields.get("nlp_context_tags", []),
+        nlp_similarity_keys=nlp_fields.get("nlp_similarity_keys", []),
+        nlp_insight_summary=nlp_fields.get("nlp_insight_summary"),
+        nlp_confidence_factors=nlp_fields.get("nlp_confidence_factors", []),
+        nlp_confidence_breakdown=nlp_fields.get("nlp_confidence_breakdown", {}),
+        nlp_sentiment_intensity=nlp_fields.get("nlp_sentiment_intensity"),
     )
 
 

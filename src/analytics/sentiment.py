@@ -227,4 +227,11 @@ def _nlp_result_to_dict(result: Any) -> dict[str, Any]:
         "nlp_language": result.language,
         "nlp_provider": result.llm_provider,
         "nlp_model": result.model_name,
+        "nlp_core_points": getattr(result, "core_points", []),
+        "nlp_context_tags": getattr(result, "context_tags", []),
+        "nlp_similarity_keys": getattr(result, "similarity_keys", []),
+        "nlp_insight_summary": getattr(result, "insight_summary", None),
+        "nlp_confidence_factors": getattr(result, "confidence_factors", []),
+        "nlp_confidence_breakdown": getattr(result, "confidence_breakdown", {}),
+        "nlp_sentiment_intensity": getattr(result, "sentiment_intensity", 0.0),
     }

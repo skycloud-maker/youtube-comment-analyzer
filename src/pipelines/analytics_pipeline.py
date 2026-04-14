@@ -149,6 +149,13 @@ class AnalyticsPipeline:
             analysis_comments["nlp_language"] = analysis_results.map(lambda item: item.nlp_language)
             analysis_comments["nlp_provider"] = analysis_results.map(lambda item: item.nlp_provider)
             analysis_comments["nlp_model"] = analysis_results.map(lambda item: item.nlp_model)
+            analysis_comments["nlp_core_points"] = analysis_results.map(lambda item: item.nlp_core_points)
+            analysis_comments["nlp_context_tags"] = analysis_results.map(lambda item: item.nlp_context_tags)
+            analysis_comments["nlp_similarity_keys"] = analysis_results.map(lambda item: item.nlp_similarity_keys)
+            analysis_comments["nlp_insight_summary"] = analysis_results.map(lambda item: item.nlp_insight_summary)
+            analysis_comments["nlp_confidence_factors"] = analysis_results.map(lambda item: item.nlp_confidence_factors)
+            analysis_comments["nlp_confidence_breakdown"] = analysis_results.map(lambda item: item.nlp_confidence_breakdown)
+            analysis_comments["nlp_sentiment_intensity"] = analysis_results.map(lambda item: item.nlp_sentiment_intensity)
             representative_meta = analysis_comments.apply(self._representative_metadata, axis=1, result_type="expand")
             analysis_comments = pd.concat([analysis_comments, representative_meta], axis=1)
             analysis_comments["topic_label"] = analysis_comments["cleaned_text"].map(infer_topic)
@@ -169,6 +176,8 @@ class AnalyticsPipeline:
                 "nlp_label", "nlp_confidence", "nlp_sentiment_reason", "nlp_topics",
                 "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical", "nlp_summary",
                 "nlp_keywords", "nlp_product_mentions", "nlp_language", "nlp_provider", "nlp_model",
+                "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys", "nlp_insight_summary",
+                "nlp_confidence_factors", "nlp_confidence_breakdown", "nlp_sentiment_intensity",
             ]
             _available_merge_cols = [c for c in _merge_cols if c in analysis_comments.columns]
             working_comments = working_comments.merge(
@@ -190,6 +199,8 @@ class AnalyticsPipeline:
                 "nlp_topics", "nlp_topic_sentiments", "nlp_is_inquiry", "nlp_is_rhetorical",
                 "nlp_summary", "nlp_keywords", "nlp_product_mentions", "nlp_language",
                 "nlp_provider", "nlp_model",
+                "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys", "nlp_insight_summary",
+                "nlp_confidence_factors", "nlp_confidence_breakdown", "nlp_sentiment_intensity",
             ]
             for column in _empty_cols:
                 working_comments[column] = pd.NA
