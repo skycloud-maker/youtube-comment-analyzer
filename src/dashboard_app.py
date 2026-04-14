@@ -1790,34 +1790,35 @@ def _summarize_for_dashboard(selected: pd.Series, sentiment_name: str) -> str:
         translation = _resolve_card_translation(original, translation, False)
     source_text = (translation if translation and translation != "한국어 번역을 준비 중입니다." else original).strip()
     if not source_text:
-        return "제품 관련 경험을 언급했지만 핵심 맥락이 부족해 추가 확인이 필요한 댓글입니다."
+        return "원문 정보가 부족해 요약을 만들지 못했습니다."
 
     lowered = source_text.lower()
     products = [token for token in ["드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기"] if token in source_text]
     product_subject = "·".join(products[:2]) if products else "해당 제품"
 
     scenarios = [
-        (["구독", "가입", "권유", "매니저", "할부"], "구독 가입/권유 과정"),
-        (["고장", "수리", "as", "서비스", "출장", "보증"], "A/S·수리 대응"),
-        (["배송", "설치", "기사"], "배송·설치 과정"),
-        (["소음", "진동", "탈수", "세척", "건조", "성능", "냉각"], "핵심 성능 체감"),
-        (["불편", "무겁", "허리", "꺼내", "조작"], "사용 편의"),
-        (["가격", "비싸", "비용", "전기세"], "가격·비용 부담"),
-        (["옷감", "보풀", "손상", "엉킴", "늘어"], "옷감 관리 경험"),
+        (["구독", "가입", "권유", "매니저", "할부", "해지", "위약금"], "구매/계약"),
+        (["고장", "수리", "as", "서비스", "출장", "보증", "연락"], "A/S"),
+        (["배송", "설치", "기사"], "배송/설치"),
+        (["소음", "진동", "탈수", "세척", "건조", "성능", "냉각"], "사용"),
+        (["불편", "무겁", "허리", "꺼내", "조작"], "사용"),
+        (["가격", "비싸", "비용", "전기세"], "가격/비용"),
+        (["옷감", "보풀", "손상", "엉킴", "늘어"], "사용"),
     ]
-    scenario = next((label for markers, label in scenarios if any(marker in lowered for marker in markers)), "사용 경험")
+    scenario = next((label for markers, label in scenarios if any(marker in lowered for marker in markers)), "사용")
 
     inquiry_flag = _truthy(selected.get("nlp_is_inquiry")) or _truthy(selected.get("inquiry_flag")) or ("?" in source_text)
     keywords = _extract_card_keywords(selected, sentiment_name, limit=3)
-    focus = ", ".join(keywords[:2]) if keywords else scenario
+    focus = ", ".join(keywords[:2]) if keywords else "핵심 쟁점"
+    fact = _extract_comment_fact_summary(source_text, sentiment_name, focus)
 
     if inquiry_flag:
-        return f"{product_subject} 관련 {scenario}에서 '{focus}' 정보를 확인하려는 문의성 댓글입니다."
+        return f"{product_subject} {scenario} 맥락에서 '{focus}' 확인을 요청한 문의 댓글입니다. {fact}"
     if sentiment_name == "negative":
-        return f"{product_subject} 관련 {scenario}에서 '{focus}' 문제를 구체적으로 지적한 불편·불만 신호입니다. 원인군(제품/설치/서비스/정책) 분류 후 관리 우선순위 판단에 바로 활용할 수 있습니다."
+        return f"{product_subject} {scenario} 단계에서 '{focus}' 때문에 불편·불만을 호소한 내용입니다. {fact}"
     if sentiment_name == "positive":
-        return f"{product_subject} 관련 {scenario}에서 '{focus}'를 강점으로 체감한 긍정 신호입니다. 이 포인트가 구매 전환/추천으로 이어지는 강점 가설을 지지합니다."
-    return f"{product_subject} 관련 {scenario}에서 '{focus}'에 대한 평가와 경험을 함께 전달한 댓글입니다."
+        return f"{product_subject} {scenario} 단계에서 '{focus}'를 장점으로 평가한 내용입니다. {fact}"
+    return f"{product_subject} {scenario} 단계 경험을 설명한 댓글입니다. {fact}"
 
 
 def _decision_badge(decision: str) -> tuple[str, str]:
@@ -3242,6 +3243,91 @@ def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, lim
     return deduped_ranked[:limit]
 
 
+def _extract_comment_fact_summary(text_value: str, sentiment_name: str, fallback_focus: str) -> str:
+    text = _safe_text(text_value)
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", " ", text)
+    compact = re.sub(r"https?://\S+", "", compact).strip()
+    clauses = [part.strip() for part in re.split(r"[.!?\n]", compact) if part.strip()]
+    if not clauses:
+        clauses = [compact]
+    primary = clauses[0]
+    if len(primary) > 90:
+        primary = primary[:88].rstrip() + "…"
+
+    lowered = compact.lower()
+    stage_map = [
+        (["구독", "가입", "권유", "해지", "위약금", "할부"], "구매/계약"),
+        (["수리", "as", "a/s", "서비스", "기사", "보증", "연락"], "A/S"),
+        (["배송", "설치"], "배송/설치"),
+        (["사용", "써보", "세탁", "건조", "소음", "진동", "세척"], "사용"),
+    ]
+    stage = next((name for markers, name in stage_map if any(marker in lowered for marker in markers)), "사용")
+
+    issue_map = [
+        (["소음", "진동"], "소음·진동"),
+        (["세척", "세탁력"], "세척 성능"),
+        (["건조"], "건조 성능"),
+        (["고장", "불량", "누수"], "품질/고장"),
+        (["가격", "비용", "비싸", "전기세"], "가격/비용"),
+        (["권유", "해지", "위약금"], "계약/안내"),
+        (["불편", "무겁", "허리"], "사용 편의"),
+    ]
+    issue = next((name for markers, name in issue_map if any(marker in lowered for marker in markers)), fallback_focus or "핵심 쟁점")
+
+    if sentiment_name == "negative":
+        return f"{stage} 단계에서 {issue} 관련 불편을 제기한 댓글입니다. 핵심 진술: '{primary}'"
+    if sentiment_name == "positive":
+        return f"{stage} 단계에서 {issue} 강점을 언급한 댓글입니다. 핵심 진술: '{primary}'"
+    return f"{stage} 단계에서 {issue}에 대한 관찰 의견입니다. 핵심 진술: '{primary}'"
+
+
+def _collect_video_context_signals(working_selected: pd.Series, source_comments: pd.DataFrame | None) -> dict[str, Any]:
+    if source_comments is None or source_comments.empty:
+        return {"count": 1, "negative_share": 0.0, "positive_share": 0.0, "top_points": [], "top_tags": []}
+
+    pool = source_comments.copy()
+    if "comment_validity" in pool.columns:
+        pool = pool[pool["comment_validity"].astype(str).eq("valid")].copy()
+    if pool.empty:
+        return {"count": 1, "negative_share": 0.0, "positive_share": 0.0, "top_points": [], "top_tags": []}
+
+    video_id = _safe_text(working_selected.get("video_id", ""))
+    video_link = _safe_text(working_selected.get(COL_VIDEO_LINK, working_selected.get("video_url", "")))
+    if video_id and "video_id" in pool.columns:
+        subset = pool[pool["video_id"].astype(str).eq(video_id)].copy()
+    elif video_link:
+        link_col = COL_VIDEO_LINK if COL_VIDEO_LINK in pool.columns else ("video_url" if "video_url" in pool.columns else "")
+        subset = pool[pool[link_col].astype(str).eq(video_link)].copy() if link_col else pool.head(0).copy()
+    else:
+        subset = pool.head(0).copy()
+    if subset.empty:
+        subset = pool.copy()
+
+    sentiment = subset.get("sentiment_label", pd.Series("", index=subset.index)).astype(str)
+    total = max(1, len(subset))
+    negative_share = float((sentiment == "negative").sum()) / total
+    positive_share = float((sentiment == "positive").sum()) / total
+
+    point_counter: Counter[str] = Counter()
+    tag_counter: Counter[str] = Counter()
+    if "nlp_core_points" in subset.columns:
+        for items in subset["nlp_core_points"].tolist():
+            point_counter.update(_clean_point_tokens(_parse_list_like(items), limit=6))
+    if "nlp_context_tags" in subset.columns:
+        for items in subset["nlp_context_tags"].tolist():
+            tag_counter.update([_safe_text(item) for item in _parse_list_like(items) if _safe_text(item)])
+
+    return {
+        "count": len(subset),
+        "negative_share": negative_share,
+        "positive_share": positive_share,
+        "top_points": [token for token, _ in point_counter.most_common(4)],
+        "top_tags": [token for token, _ in tag_counter.most_common(3)],
+    }
+
+
 def _extract_video_theme_tokens(working_selected: pd.Series) -> list[str]:
     text_sources = [
         _safe_text(working_selected.get(COL_VIDEO_TITLE, "")),
@@ -3284,6 +3370,7 @@ def _build_video_context_insight(
     sentiment_name: str,
     aspect_label: str,
     keywords: list[str],
+    source_comments: pd.DataFrame | None = None,
     negative_context: dict[str, str] | None = None,
 ) -> str:
     core_points, context_tags, _, _, _, insight_summary = _extract_row_nlp_metadata(working_selected)
@@ -3313,24 +3400,32 @@ def _build_video_context_insight(
             _safe_text(working_selected.get("cleaned_text", "")),
         ]
     ).strip()
-    evidence = _summarize_original_for_preview(source_text, limit=82) if source_text else ""
+    evidence = _extract_comment_fact_summary(source_text, sentiment_name, point_focus) if source_text else ""
     cluster_size = int(pd.to_numeric(working_selected.get("cluster_size", 1), errors="coerce") or 1)
+    video_signals = _collect_video_context_signals(working_selected, source_comments)
+    signal_points = video_signals.get("top_points", []) or []
+    signal_tags = video_signals.get("top_tags", []) or []
+    tag_hint = ", ".join(context_tags[:2]) if context_tags else "핵심 포인트"
+    signal_point_text = ", ".join(signal_points[:2]) if signal_points else point_focus
+    signal_tag_text = ", ".join(signal_tags[:2]) if signal_tags else tag_hint
+    neg_share = float(video_signals.get("negative_share", 0.0) or 0.0)
+    pos_share = float(video_signals.get("positive_share", 0.0) or 0.0)
+    context_count = int(video_signals.get("count", 1) or 1)
 
     context_bits = [f"{cej} 단계", localized_aspect]
     if theme_tokens:
         context_bits.append(f"영상 주제({', '.join(theme_tokens[:2])})")
     context_text = " · ".join(context_bits)
-    tag_hint = ", ".join(context_tags[:2]) if context_tags else "핵심 포인트"
-
     if sentiment_name == "negative":
         priority, priority_reason = _negative_priority_bucket(
             negative_context=negative_context,
             cluster_size=cluster_size,
             inquiry_flag=_truthy(working_selected.get("nlp_is_inquiry")),
         )
-        base = insight_summary or f"{family_label} 맥락에서 '{point_focus}' 불만이 반복됩니다."
-        evidence_text = f"대표 원문은 '{evidence}'로 문제 상황을 직접 설명합니다." if evidence else "원문에서 문제 상황이 직접 서술됩니다."
-        return f"{context_text}에서 {base} {evidence_text} 유사 댓글 {cluster_size:,}건 기준으로 현재 신호는 '{priority}'({priority_reason})입니다."
+        base = insight_summary or f"{family_label} 맥락에서 '{signal_point_text}' 불만이 반복됩니다."
+        evidence_text = f"대표 댓글 근거: {evidence}" if evidence else "대표 댓글 근거가 확인됩니다."
+        share_text = f"동일 영상 맥락 댓글 {context_count:,}건 중 부정 {neg_share * 100:.1f}%/긍정 {pos_share * 100:.1f}% 분포입니다."
+        return f"{context_text}에서 {base} 영상-댓글 연결 포인트는 '{signal_tag_text}'이며, {evidence_text} {share_text} 따라서 현재 신호는 '{priority}'({priority_reason})로 해석됩니다."
 
     if sentiment_name == "positive":
         if "비교 맥락" in context_tags:
@@ -3341,11 +3436,13 @@ def _build_video_context_insight(
             strength_hypothesis = "구매 직전 판단에서 전환을 밀어주는 강점 가설"
         else:
             strength_hypothesis = "반복 노출 시 전환/재구매로 이어질 수 있는 강점 가설"
-        base = insight_summary or f"{family_label} 맥락에서 '{point_focus}'가 긍정 근거로 반복됩니다."
-        return f"{context_text}에서 {base} 이는 '{strength_hypothesis}'을(를) 지지하며, 유사 댓글 {cluster_size:,}건이 강점 재현 가능성을 보강합니다."
+        base = insight_summary or f"{family_label} 맥락에서 '{signal_point_text}'가 긍정 근거로 반복됩니다."
+        evidence_text = f"대표 댓글 근거: {evidence}" if evidence else "대표 댓글 근거가 확인됩니다."
+        share_text = f"동일 영상 맥락 댓글 {context_count:,}건 중 긍정 {pos_share * 100:.1f}%/부정 {neg_share * 100:.1f}%입니다."
+        return f"{context_text}에서 {base} {evidence_text} {share_text} 이는 '{strength_hypothesis}'을(를) 지지합니다."
 
-    base = insight_summary or f"{tag_hint} 중심으로 '{point_focus}' 의견이 혼재합니다."
-    return f"{context_text}에서 {base} 아직은 단정 대신 추가 관찰이 필요한 상태입니다."
+    base = insight_summary or f"{tag_hint} 중심으로 '{signal_point_text}' 의견이 혼재합니다."
+    return f"{context_text}에서 {base} (부정 {neg_share * 100:.1f}% / 긍정 {pos_share * 100:.1f}%) 아직은 단정 대신 추가 관찰이 필요한 상태입니다."
 
 
 def _build_resolution_point(
@@ -3391,18 +3488,18 @@ def _build_resolution_point(
             inquiry_flag=inquiry_flag,
         )
         if inquiry_flag:
-            return f"[{priority}] {focus} 문의는 24시간 답변 SLA·표준 답변 템플릿을 먼저 적용하고, 미해결 건은 주간 백로그로 자동 이관하세요. ({priority_reason})"
+            return f"[{priority}] {focus} 문의군은 24시간 답변 SLA와 표준 답변 템플릿을 즉시 적용하고, 1주 내 미해결 건은 원인코드(제품/설치/정책)로 분류해 백로그로 이관하세요. 성공지표는 1차 해결률·재문의율입니다. ({priority_reason})"
         mapped = action_map.get(primary_tag, f"{focus} 원인을 제품/설치/서비스/정책으로 먼저 분류하고, 상위 원인군부터 담당·기한을 지정해 주 단위로 추적하세요.")
-        return f"[{priority}] {mapped} ({priority_reason})"
+        return f"[{priority}] {mapped} 실행은 즉시(72h) 공지/응대 수정 → 단기(2주) 원인코드 상위 3개 제거 → 중기(분기) 재발률 개선 순으로 운영하세요. ({priority_reason})"
 
     if sentiment_value == "positive":
         if "비교 맥락" in context_tags:
-            return f"[강점 확장] {focus} 우위를 비교표·설명란·고정댓글에 동일 문구로 재노출해 '비교→구매 전환' 기여도를 측정하세요."
+            return f"[강점 확장] {focus} 우위를 비교표·설명란·고정댓글에서 동일 메시지로 재노출하고, 비교유입의 전환율 상승 여부를 별도 추적하세요."
         if "추천 의도" in context_tags:
-            return f"[강점 확장] {focus} 추천 맥락 댓글을 사례형 콘텐츠로 재활용하고, 추천 유입 전환률을 별도 트래킹하세요."
+            return f"[강점 확장] {focus} 추천 사례를 짧은 후속 콘텐츠로 재활용하고, 추천 유입/재구매 전환률을 월 단위로 측정하세요."
         if "구매 전환" in context_tags:
-            return f"[강점 확장] {focus} 강점을 구매 직전 접점(상세페이지/FAQ/숏폼)에서 반복 노출해 전환 상승 효과를 검증하세요."
-        return f"[강점 확장] {focus} 만족 신호가 어떤 상황(첫구매/교체/비교)에서 반복되는지 태깅해 재현 가능한 강점 메시지로 고정하세요."
+            return f"[강점 확장] {focus} 강점을 구매 직전 접점(상세페이지/FAQ/숏폼)에 통일 노출해 전환 상승 효과를 검증하세요."
+        return f"[강점 확장] {focus} 만족 신호가 반복되는 상황(첫구매/교체/비교)을 태깅해, 메시지 우선순위와 소재 믹스를 재배치하세요."
 
     return f"[관찰] {focus} 반응은 혼합 신호이므로 주차별 추세와 전환 지표를 함께 관찰하고, 증가 임계치 도달 시 즉시 대응으로 전환하세요."
 
@@ -3487,6 +3584,28 @@ def _refine_aspect_label(aspect_label: str, working_selected: pd.Series, keyword
     label = _safe_text(aspect_label).strip()
     if not label:
         label = "General"
+    if re.match(r"^(이슈\s*\d+|issue\s*\d+)$", label.lower()):
+        label = "General"
+
+    core_points, context_tags, _, _, _, _ = _extract_row_nlp_metadata(working_selected)
+    if context_tags:
+        context_map = {
+            "구독/계약": "Cost",
+            "A/S·수리": "A/S & Support",
+            "배송·설치": "Delivery/Install",
+            "가격·비용": "Cost",
+            "성능·품질": "Performance",
+            "사용성·편의": "Convenience/Usability",
+            "비교 맥락": "Product Experience",
+            "구매 전환": "Cost",
+            "추천 의도": "Product Experience",
+            "문의/해결요청": "A/S & Support",
+        }
+        for tag in context_tags:
+            mapped = context_map.get(_safe_text(tag))
+            if mapped:
+                return mapped
+
     if label.lower() not in {"general", "기타", "other", "대표 코멘트"}:
         return label
 
@@ -3495,7 +3614,7 @@ def _refine_aspect_label(aspect_label: str, working_selected: pd.Series, keyword
             _safe_text(display_text),
             _safe_text(working_selected.get(COL_ORIGINAL, "")),
             _safe_text(working_selected.get(COL_TRANSLATION, "")),
-            " ".join(keywords),
+            " ".join(core_points or keywords),
         ]
     ).lower()
 
@@ -3562,6 +3681,7 @@ def _render_representative_nlp_panel(
     sentiment_name: str,
     aspect_label: str,
     display_text: str,
+    source_comments: pd.DataFrame | None = None,
     negative_context: dict[str, str] | None = None,
 ) -> None:
     sentiment_value = _resolve_sentiment_for_card(working_selected, sentiment_name)
@@ -3635,7 +3755,14 @@ def _render_representative_nlp_panel(
         or (summary.endswith("...") and _safe_text(display_text).startswith(summary[:-3]))
     ):
         summary = _summarize_for_dashboard(working_selected, sentiment_value)
-    if insight_summary and len(insight_summary) >= 12 and not _looks_garbled(insight_summary):
+    summary_is_low_quality = (
+        not summary
+        or _looks_garbled(summary)
+        or summary in low_quality_summary_markers
+        or len(summary) < 12
+        or (summary.endswith("...") and _safe_text(display_text).startswith(summary[:-3]))
+    )
+    if summary_is_low_quality and insight_summary and len(insight_summary) >= 12 and not _looks_garbled(insight_summary):
         summary = insight_summary
     if not summary:
         summary = "핵심 의견: 댓글 원문에서 제품 사용 경험에 대한 평가가 확인됩니다."
@@ -3645,6 +3772,7 @@ def _render_representative_nlp_panel(
         sentiment_name=sentiment_value,
         aspect_label=aspect_label,
         keywords=core_points or keywords,
+        source_comments=source_comments,
         negative_context=negative_context,
     )
     action_point = _build_resolution_point(
@@ -3783,6 +3911,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 sentiment_name=sentiment_name,
                 aspect_label=aspect_label,
                 display_text=display_text,
+                source_comments=source_comments,
                 negative_context=negative_context,
             )
 

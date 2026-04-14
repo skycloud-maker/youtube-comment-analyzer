@@ -79,6 +79,7 @@ UI_NOISE_TERMS = {
     "사용중", "구입", "구입했", "고장나서", "귀찮겠네요",
     # User-reported noisy tokens
     "샀는데", "샀다", "샀어요", "있는데", "없이", "없어서", "있는데요", "없는데",
+    "커서", "밤에", "낮에", "낮에도", "밤에도", "새벽에",
 }
 
 # Brand/product terms that shouldn't be separate keywords (already in brand filter)
@@ -164,6 +165,10 @@ BUSINESS_KEEPWORDS = {
     "얼룩", "품질", "성능", "앱연결", "와이파이", "설명서", "청소", "교체", "선반", "건조시간", "세탁시간",
     "소독", "살균", "건조", "세척력", "냉각", "온도", "얼음", "소비전력", "정숙성", "배수", "물튐",
     "설치비", "소비전력", "보증", "AS", "A/S", "앱", "연동", "물샘", "탈수", "소음문제", "용량부족",
+}
+
+PRODUCT_KEYWORDS = {
+    "통돌이", "드럼", "세탁기", "건조기", "냉장고", "식기세척기", "로봇청소기", "청소기",
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]+|[0-9A-Za-z가-힣+/]+")
@@ -258,7 +263,23 @@ def build_keyword_counter(texts: Iterable[str]) -> Counter[str]:
 
 
 def filter_business_keywords(counter: Counter[str], top_n: int) -> list[tuple[str, int]]:
-    filtered = [(keyword, count) for keyword, count in counter.items() if keyword in BUSINESS_KEEPWORDS or bool(re.search(r"[\uac00-\ud7a3]", keyword))]
+    def _is_actionable(token: str) -> bool:
+        if not token:
+            return False
+        if token in STOPWORDS or token in GENERIC_EXCLUDE or token in UI_NOISE_TERMS:
+            return False
+        if token.isdigit() or len(token) < 2:
+            return False
+        if token in BUSINESS_KEEPWORDS or token in PRODUCT_KEYWORDS:
+            return True
+        # Keep only business-ish Korean nouns (avoid residual adverb-like tails)
+        if bool(re.search(r"[\uac00-\ud7a3]", token)):
+            if token.endswith(("하게", "하게요", "처럼", "같이", "커서", "때문", "에서", "으로")):
+                return False
+            return True
+        return False
+
+    filtered = [(keyword, count) for keyword, count in counter.items() if _is_actionable(keyword)]
     filtered.sort(key=lambda item: item[1], reverse=True)
     return filtered[:top_n]
 
