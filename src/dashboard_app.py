@@ -3215,14 +3215,63 @@ def _build_similar_comments(
         return pd.DataFrame()
     working_pool = pool.copy()
 
+    def _video_key(value: Any) -> str:
+        text = _safe_text(value)
+        if not text:
+            return ""
+        for pattern in [r"[?&]v=([A-Za-z0-9_-]{6,})", r"youtu\.be/([A-Za-z0-9_-]{6,})", r"/shorts/([A-Za-z0-9_-]{6,})"]:
+            matched = re.search(pattern, text)
+            if matched:
+                return matched.group(1)
+        return ""
+
+    def _soft_filter(frame: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
+        """Apply metadata filter only when it keeps enough candidates."""
+        candidate = frame[mask.fillna(False)].copy()
+        return candidate if len(candidate) >= 3 else frame
+
+    def _normalize_topic(value: Any) -> str:
+        text = _safe_text(value).strip()
+        if not text:
+            return ""
+        if re.match(r"^(이슈\s*\d+|issue\s*\d+)$", text.lower()):
+            return "제품 경험"
+        return _safe_text(_localize_aspect_label(text)).strip().lower()
+
     video_link_for_filter = _safe_text(working_selected.get(COL_VIDEO_LINK, selected.get(COL_VIDEO_LINK, "")))
-    if video_id and "video_id" in working_pool.columns:
-        working_pool = working_pool[working_pool["video_id"].astype(str) == video_id].copy()
-    elif video_link_for_filter:
+    if video_id:
+        mask = pd.Series(False, index=working_pool.index)
+        if "video_id" in working_pool.columns:
+            mask = mask | working_pool["video_id"].astype(str).eq(video_id)
         if COL_VIDEO_LINK in working_pool.columns:
-            working_pool = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
-        elif "video_url" in working_pool.columns:
-            working_pool = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
+            mask = mask | working_pool[COL_VIDEO_LINK].map(_video_key).eq(video_id)
+        if "video_url" in working_pool.columns:
+            mask = mask | working_pool["video_url"].map(_video_key).eq(video_id)
+        candidate = working_pool[mask].copy()
+        if not candidate.empty:
+            working_pool = candidate
+    elif video_link_for_filter:
+        video_key = _video_key(video_link_for_filter)
+        if video_key:
+            mask = pd.Series(False, index=working_pool.index)
+            if "video_id" in working_pool.columns:
+                mask = mask | working_pool["video_id"].astype(str).eq(video_key)
+            if COL_VIDEO_LINK in working_pool.columns:
+                mask = mask | working_pool[COL_VIDEO_LINK].map(_video_key).eq(video_key)
+            if "video_url" in working_pool.columns:
+                mask = mask | working_pool["video_url"].map(_video_key).eq(video_key)
+            candidate = working_pool[mask].copy()
+            if not candidate.empty:
+                working_pool = candidate
+        else:
+            if COL_VIDEO_LINK in working_pool.columns:
+                candidate = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
+                if not candidate.empty:
+                    working_pool = candidate
+            elif "video_url" in working_pool.columns:
+                candidate = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
+                if not candidate.empty:
+                    working_pool = candidate
 
     if "comment_validity" in working_pool.columns:
         working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
@@ -3236,33 +3285,37 @@ def _build_similar_comments(
             if key in working_pool.columns:
                 working_pool = working_pool[working_pool[key].astype(str) != rep_id].copy()
 
-    # Narrow similar-comment pool by topic/product/brand/cej when available to avoid
-    # showing an unrelated broad pool for every representative card.
+    # Narrow by metadata only when each step still keeps enough candidates.
+    # This keeps bundle-path cards from collapsing to zero due to label mismatch.
     narrowed = working_pool.copy()
-    topic_value = _safe_text(selected.get("topic_label", selected.get("aspect_key", "")))
-    if topic_value:
+    topic_value = _safe_text(working_selected.get("topic_label", working_selected.get("aspect_key", selected.get("topic_label", selected.get("aspect_key", "")))))
+    topic_norm = _normalize_topic(topic_value)
+    if topic_norm:
+        topic_series = pd.Series("", index=narrowed.index)
         if "topic_label" in narrowed.columns:
-            narrowed = narrowed[narrowed["topic_label"].astype(str) == topic_value].copy()
+            topic_series = narrowed["topic_label"]
         elif "aspect_key" in narrowed.columns:
-            narrowed = narrowed[narrowed["aspect_key"].astype(str) == topic_value].copy()
+            topic_series = narrowed["aspect_key"]
+        if not topic_series.empty:
+            narrowed = _soft_filter(narrowed, topic_series.map(_normalize_topic).eq(topic_norm))
 
-    product_value = _safe_text(selected.get("product", working_selected.get("product", "")))
+    product_value = canonicalize_product_label(_safe_text(working_selected.get("product", selected.get("product", ""))))
     if product_value and "product" in narrowed.columns:
-        narrowed = narrowed[narrowed["product"].astype(str) == product_value].copy()
+        narrowed = _soft_filter(narrowed, narrowed["product"].map(canonicalize_product_label).eq(product_value))
 
-    cej_value = _safe_text(selected.get(COL_CEJ, working_selected.get(COL_CEJ, "")))
+    cej_value = canonicalize_cej(_safe_text(working_selected.get(COL_CEJ, selected.get(COL_CEJ, ""))))
     if cej_value:
         if COL_CEJ in narrowed.columns:
-            narrowed = narrowed[narrowed[COL_CEJ].astype(str) == cej_value].copy()
+            narrowed = _soft_filter(narrowed, narrowed[COL_CEJ].map(canonicalize_cej).eq(cej_value))
         elif "cej_scene_code" in narrowed.columns:
-            narrowed = narrowed[narrowed["cej_scene_code"].astype(str) == cej_value].copy()
+            narrowed = _soft_filter(narrowed, narrowed["cej_scene_code"].map(canonicalize_cej).eq(cej_value))
 
-    brand_value = _safe_text(selected.get(COL_BRAND, working_selected.get(COL_BRAND, "")))
-    if brand_value:
+    brand_value = canonicalize_brand(_safe_text(working_selected.get(COL_BRAND, selected.get(COL_BRAND, ""))))
+    if brand_value and brand_value != "미언급":
         if COL_BRAND in narrowed.columns:
-            narrowed = narrowed[narrowed[COL_BRAND].astype(str) == brand_value].copy()
+            narrowed = _soft_filter(narrowed, narrowed[COL_BRAND].map(canonicalize_brand).eq(brand_value))
         elif "brand_mentioned" in narrowed.columns:
-            narrowed = narrowed[narrowed["brand_mentioned"].map(canonicalize_brand).astype(str) == brand_value].copy()
+            narrowed = _soft_filter(narrowed, narrowed["brand_mentioned"].map(canonicalize_brand).eq(brand_value))
 
     selected_sim_keys = set(_parse_list_like(selected.get("nlp_similarity_keys", [])))
     selected_sim_keys.update(_parse_list_like(working_selected.get("nlp_similarity_keys", [])))
@@ -3283,15 +3336,24 @@ def _build_similar_comments(
 
     def _score_issue_overlap(row: pd.Series) -> int:
         score = 0
-        if selected_sim_keys and "nlp_similarity_keys" in narrowed.columns:
+        if selected_sim_keys and "nlp_similarity_keys" in row.index:
             overlap = len(selected_sim_keys.intersection(set(_parse_list_like(row.get("nlp_similarity_keys", [])))))
             score += overlap * 3
         row_core = set(_clean_point_tokens(_parse_list_like(row.get("nlp_core_points", [])), limit=8))
         if selected_core_points and row_core:
             score += len(selected_core_points.intersection(row_core)) * 2
-        row_topic = _safe_text(row.get("topic_label", row.get("aspect_key", "")))
-        if topic_value and row_topic == topic_value:
+        row_topic = _normalize_topic(row.get("topic_label", row.get("aspect_key", "")))
+        if topic_norm and row_topic == topic_norm:
             score += 2
+        row_product = canonicalize_product_label(_safe_text(row.get("product", "")))
+        if product_value and row_product == product_value:
+            score += 1
+        row_cej = canonicalize_cej(_safe_text(row.get(COL_CEJ, row.get("cej_scene_code", ""))))
+        if cej_value and row_cej == cej_value:
+            score += 1
+        row_brand = canonicalize_brand(_safe_text(row.get(COL_BRAND, row.get("brand_mentioned", ""))))
+        if brand_value and brand_value != "미언급" and row_brand == brand_value:
+            score += 1
         return score
 
     if not narrowed.empty:
@@ -4006,56 +4068,65 @@ def _build_resolution_point(
     )
     evidence_clause = _summarize_original_for_preview((_pick_salient_clauses(source_text, limit=1) or [focus])[0], limit=68)
     cluster_size = int(pd.to_numeric(row.get("cluster_size", 1), errors="coerce") or 1)
-
+    product_hint = canonicalize_product_label(_safe_text(row.get("product", ""))) or "해당 제품"
+    focus_hint = _safe_text(focus_tokens[0]) if focus_tokens else "핵심 불편"
     primary_tag = _safe_text(context_tags[0]) if context_tags else ""
-    owner_map = {
-        "구독/계약": "영업·정책 운영",
-        "A/S·수리": "고객지원·서비스 운영",
-        "배송·설치": "물류·설치 운영",
-        "가격·비용": "가격정책·커뮤니케이션",
-        "성능·품질": "제품·품질 운영",
-        "사용성·편의": "제품기획·UX 운영",
-    }
-    metric_map = {
-        "구독/계약": "권유 민원률·해지 문의율",
-        "A/S·수리": "1차 해결률·재방문률",
-        "배송·설치": "설치 지연률·초기 불만률",
-        "가격·비용": "가격 오해 문의율·이탈률",
-        "성능·품질": "재현 성공률·동일 이슈 재발률",
-        "사용성·편의": "사용장벽 문의율·온보딩 이탈률",
-    }
-    owner = owner_map.get(primary_tag, "CX 운영")
-    metric = metric_map.get(primary_tag, "반복률·해결리드타임")
-    action_map = {
-        "구독/계약": f"'{evidence_clause}' 사례를 기준으로 권유 스크립트·약관 안내·해지 고지 문구를 분리 점검하세요.",
-        "A/S·수리": f"'{evidence_clause}' 유형을 우선 케이스로 지정해 접수→배정→방문→완료 리드타임 병목을 먼저 제거하세요.",
-        "배송·설치": f"'{evidence_clause}'와 연결된 일정 지연/현장 안내 누락을 분리 추적하고 초기 7일 대응을 강화하세요.",
-        "가격·비용": f"'{evidence_clause}' 오해가 생긴 지점을 찾아 총비용 안내(월납·할부·해지비용) 문구를 먼저 교체하세요.",
-        "성능·품질": f"'{evidence_clause}' 상황을 재현 시나리오로 등록해 제품·가이드 개선 우선순위에 즉시 반영하세요.",
-        "사용성·편의": f"'{evidence_clause}'에서 드러난 사용 마찰을 동선 기준으로 쪼개 FAQ/온보딩 메시지를 먼저 보완하세요.",
-    }
+    if not primary_tag:
+        hint_blob = " ".join(
+            [
+                source_text.lower(),
+                " ".join([_safe_text(token).lower() for token in focus_tokens]),
+            ]
+        )
+        inferred_rules = [
+            (["a/s", "as", "repair", "service", "support", "고장", "수리", "기사", "센터"], "A/S·수리"),
+            (["delivery", "install", "shipping", "배송", "설치", "기사방문"], "배송·설치"),
+            (["subscription", "contract", "price", "cost", "fee", "구독", "계약", "약정", "요금", "가격", "해지"], "구독/계약"),
+            (["performance", "quality", "noise", "smell", "leak", "세척", "성능", "품질", "소음", "냄새", "누수"], "성능·품질"),
+            (["usability", "ui", "button", "manual", "불편", "사용", "조작", "청소", "무거"], "사용성·편의"),
+        ]
+        for tokens, inferred_tag in inferred_rules:
+            if any(token in hint_blob for token in tokens):
+                primary_tag = inferred_tag
+                break
+    inquiry_suffix = " 문의 성격이 강하므로 응답 문구를 고객 언어로 먼저 정리하세요." if inquiry_flag else ""
+    detail_blob = " ".join([source_text.lower(), _safe_text(focus_hint).lower(), _safe_text(evidence_clause).lower()])
 
     if sentiment_value == "negative":
-        priority, priority_reason = _negative_priority_bucket(
+        priority, _ = _negative_priority_bucket(
             negative_context=negative_context,
             cluster_size=cluster_size,
             inquiry_flag=inquiry_flag,
         )
-        if inquiry_flag:
-            return f"[{priority}] '{evidence_clause}' 문의군을 우선 처리 대상으로 분리하고, 미해결 건은 원인군(제품/설치/정책)으로 나눠 주 단위로 추적하세요. 핵심 지표는 {metric}입니다."
-        mapped = action_map.get(primary_tag, f"'{evidence_clause}'를 기준으로 원인군(제품/설치/서비스/정책)을 먼저 분리하고 상위 원인부터 담당·기한을 지정하세요.")
-        return f"[{priority}] {owner} 관점에서 {mapped} 우선순위는 '{priority_reason}'이며, 실행 결과는 {metric} 지표로 주 단위 점검하세요."
+        if any(token in detail_blob for token in ["냄새", "smell", "odor"]):
+            as_action = f"{product_hint} 사용 중 냄새 민원이 반복되므로 밀폐 구조·배기 경로·필터 교체주기 안내를 함께 수정해 체감 냄새를 낮추세요."
+        elif any(token in detail_blob for token in ["필터", "filter", "소모품"]):
+            as_action = f"{product_hint}의 필터/소모품 교체 타이밍에서 혼선이 생기므로 교체 기준·증상별 안내·구매 동선을 한 화면으로 통합하세요."
+        elif any(token in detail_blob for token in ["고객지원", "support", "service", "응대", "센터"]):
+            as_action = f"{product_hint} 지원 문의가 반복되는 구간을 접수→답변→완료 흐름으로 재설계하고, 첫 답변에서 해결 경로를 명확히 제시하세요."
+        else:
+            as_action = f"{product_hint}에서 반복된 '{focus_hint}' 불편은 수리 체감 공백이 핵심이므로 고장유형별 1차 진단 기준과 방문 전 부품확정 절차를 표준화하세요."
+        negative_actions = {
+            "구독/계약": f"'{evidence_clause}'에서 드러난 가입·해지 혼선을 줄이기 위해 {product_hint} 월납/약정/해지비용 안내를 한 흐름으로 재작성하고, 과도 권유 멘트는 즉시 교정하세요.",
+            "A/S·수리": as_action,
+            "배송·설치": f"'{evidence_clause}' 사례를 기준으로 일정 지연과 현장 안내 누락을 분리해 점검하고, 설치 직후 7일 케어 안내를 보강하세요.",
+            "가격·비용": f"'{evidence_clause}'처럼 비용 인식이 틀어지는 지점을 찾아 총비용(월납·할부·해지비용) 안내 문구와 결제 직전 고지를 함께 손보세요.",
+            "성능·품질": f"'{evidence_clause}' 상황을 재현 테스트로 등록하고, 냄새·소음·세척력처럼 직접 불편을 만드는 항목부터 제품/가이드 개선안을 우선 적용하세요.",
+            "사용성·편의": f"'{evidence_clause}'에서 확인된 사용 마찰을 동작 순서 기준으로 쪼개 버튼/안내/청소 동선을 재설계하세요.",
+        }
+        default_action = f"{product_hint} 사용에서 드러난 '{focus_hint}' 문제를 기준으로 제품·정책·운영 중 책임 영역을 고정하고, 고객이 체감하는 개선 여부를 다음 배치에서 확인하세요."
+        return f"[{priority}] {negative_actions.get(primary_tag, default_action)}{inquiry_suffix}"
 
     if sentiment_value == "positive":
         if "비교 맥락" in context_tags:
-            return f"[강점 확장] '{evidence_clause}'에서 드러난 비교 우위를 상세설명·고정댓글·후속 콘텐츠에 동일 메시지로 재노출하고, 비교 유입 전환율을 별도 추적하세요."
+            return f"[강점 확장] '{evidence_clause}' 비교 우위를 구매 직전 접점(상세 설명/고정 댓글/짧은 영상)에 같은 표현으로 반복 노출해 전환 근거로 쓰세요."
         if "추천 의도" in context_tags:
-            return f"[강점 확장] '{evidence_clause}' 추천 맥락을 후속 숏폼/리뷰 요약에 재활용하고, 추천 유입·재구매 전환률을 월 단위로 측정하세요."
+            return f"[강점 확장] '{evidence_clause}'처럼 추천 의도가 확인된 강점은 추천 후기 묶음과 함께 노출해 지인 추천 흐름을 강화하세요."
         if "구매 전환" in context_tags:
-            return f"[강점 확장] '{evidence_clause}' 강점을 구매 직전 접점(상세페이지/FAQ/숏폼)에 통일 노출하고 전환 상승 효과를 검증하세요."
-        return f"[강점 확장] '{evidence_clause}'처럼 만족 신호가 반복되는 상황을 태깅해 메시지 우선순위와 소재 믹스를 재배치하세요."
+            return f"[강점 확장] '{evidence_clause}' 구매 결심 포인트를 결제 직전 Q&A와 비교표 상단에 배치해 이탈 구간을 줄이세요."
+        return f"[강점 확장] '{evidence_clause}'에서 드러난 {focus} 강점을 재구매·추천 상황에 맞춰 메시지 우선순위로 반영하세요."
 
-    return f"[관찰] '{evidence_clause}' 반응은 혼합 신호이므로 주차별 추세와 전환 지표를 함께 관찰하고, 증가 임계치 도달 시 즉시 대응으로 전환하세요."
+    return f"[관찰] '{evidence_clause}' 반응은 혼합 신호이므로 성급한 단정 대신 동일 맥락 재등장 여부를 확인한 뒤 대응 단계를 결정하세요."
 
 
 ASPECT_LABEL_KO = {
