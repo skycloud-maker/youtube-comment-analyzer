@@ -124,7 +124,9 @@ class VideoSearchCollector:
                     {
                         "run_id": run_id,
                         "keyword": config.keyword,
-                        "product": config.product or config.keyword,
+                        # 검색 키워드가 제품 범위 필터로 오염되지 않도록
+                        # 제품 미지정 시 기본 제품군 라벨만 채운다.
+                        "product": config.product or "가전제품",
                         "region": config.region,
                         "video_id": video_id,
                         "title": snippet.get("title"),
