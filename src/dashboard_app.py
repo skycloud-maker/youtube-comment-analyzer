@@ -4035,6 +4035,133 @@ def _build_video_context_insight(
     )
 
 
+def _build_insight_layer(
+    working_selected: pd.Series,
+    sentiment_name: str,
+    aspect_label: str,
+    keywords: list[str],
+    source_comments: pd.DataFrame | None = None,
+    similar_comments: pd.DataFrame | None = None,
+    insight_registry: dict[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    core_points, context_tags, _, _, _, _ = _extract_row_nlp_metadata(working_selected)
+    focus_tokens = core_points or _clean_point_tokens(keywords, limit=4)
+    focus_point = _safe_text(focus_tokens[0]) if focus_tokens else _localize_aspect_label(aspect_label)
+    product = canonicalize_product_label(_safe_text(working_selected.get("product", ""))) or "해당 제품"
+    source_text = _combine_unique_text_parts(
+        [
+            _safe_text(working_selected.get(COL_ORIGINAL, "")),
+            _safe_text(working_selected.get(COL_TRANSLATION, "")),
+            _safe_text(working_selected.get("cleaned_text", "")),
+        ]
+    )
+    lowered = source_text.lower()
+    representative_clause = _pick_salient_clauses(source_text, limit=1)
+    representative_evidence = _summarize_original_for_preview(representative_clause[0], limit=72) if representative_clause else ""
+    theme_tokens = _extract_video_theme_tokens(working_selected)
+    theme_hint = ", ".join(theme_tokens[:2]) if theme_tokens else _localize_aspect_label(aspect_label)
+    similar_count = len(similar_comments) if similar_comments is not None else int(pd.to_numeric(working_selected.get("cluster_size", 1), errors="coerce") or 1)
+    video_signals = _collect_video_context_signals(working_selected, source_comments)
+    neg_share = float(video_signals.get("negative_share", 0.0) or 0.0)
+    pos_share = float(video_signals.get("positive_share", 0.0) or 0.0)
+
+    has_purchase_conflict = any(
+        marker in lowered for marker in ["구독", "가입", "해지", "약정", "위약금", "권유", "가격", "비용", "할부", "결제"]
+    ) or any(tag in context_tags for tag in ["구독/계약", "가격·비용", "구매 전환"])
+    has_responsibility_shift = any(
+        marker in lowered for marker in ["사용자", "사용법", "잘못", "탓", "관리 못", "네가", "본인 책임"]
+    )
+    has_structural_repeat = similar_count >= 8
+
+    candidate_archetypes: list[str] = []
+    if sentiment_name == "negative":
+        if has_purchase_conflict:
+            candidate_archetypes.append("purchase_vs_use_conflict")
+        if has_responsibility_shift:
+            candidate_archetypes.append("responsibility_shift")
+        if has_structural_repeat:
+            candidate_archetypes.append("root_cause_repeat")
+        candidate_archetypes.append("expectation_gap")
+    elif sentiment_name == "positive":
+        if has_purchase_conflict:
+            candidate_archetypes.append("purchase_expectation_alignment")
+        candidate_archetypes.append("expectation_gap_resolved")
+    else:
+        candidate_archetypes.append("root_cause_repeat")
+
+    product_key = product or "unknown"
+    used_archetypes = insight_registry.setdefault(product_key, set()) if insight_registry is not None else set()
+    selected_archetype = next((arc for arc in candidate_archetypes if arc not in used_archetypes), candidate_archetypes[0])
+    if insight_registry is not None:
+        used_archetypes.add(selected_archetype)
+
+    if selected_archetype == "purchase_vs_use_conflict":
+        insight = (
+            f"사용자는 {product} 구매 시 비용·계약 부담이 단순하고 예측 가능하길 기대하지만, 실제 사용 과정에서는 '{focus_point}' 이슈와 함께 결제/해지 체감이 충돌하며 "
+            f"구매 기대와 사용 경험 간 충돌이 확대되고 있습니다. "
+            f"영상이 {theme_hint} 중심으로 장점을 제시한 맥락과 달리 댓글 반응은 실제 운영 조건에서의 불편을 함께 드러냅니다."
+        )
+    elif selected_archetype == "responsibility_shift":
+        insight = (
+            f"표면적으로는 '{focus_point}' 문제처럼 보이지만, 실제로는 제품 문제를 사용자 책임으로 돌리는 해석이 함께 나타나며 책임 전가 인식이 불만을 키우고 있습니다. "
+            f"사용자는 명확한 원인 설명과 재현 가능한 대응 기준을 기대하지만, 현재 경험은 그 기대를 충족하지 못하고 있습니다."
+        )
+    elif selected_archetype == "root_cause_repeat":
+        insight = (
+            f"이 반응은 단일 불만이 아니라 '{focus_point}' 유형이 반복되는 구조에서 발생한 신호로, 반복되는 불만의 근본 원인 구조를 먼저 분리해야 하는 상태입니다. "
+            f"사용자는 같은 문제를 반복 설명하지 않고 해결 경로가 연결되길 기대하지만, 실제 경험에서는 동일 문제 재진입이 이어지고 있습니다."
+        )
+    elif selected_archetype == "purchase_expectation_alignment":
+        insight = (
+            f"사용자는 {product} 선택 시 가격·조건 대비 체감 효용을 기대했고, 실제 사용에서도 '{focus_point}' 만족이 확인되어 구매 기대와 사용 경험 간 충돌이 크지 않습니다. "
+            f"이 신호는 단순 호감이 아니라 구매 판단에 쓰인 강점이 실제 경험으로 검증되고 있음을 보여줍니다."
+        )
+    elif selected_archetype == "expectation_gap_resolved":
+        insight = (
+            f"사용자는 {product}에서 '{focus_point}'가 실제로 구현되길 기대했고, 현재 반응은 기대와 현실의 괴리가 작아 신뢰가 유지되는 흐름을 보여줍니다. "
+            f"영상 맥락({theme_hint})과 실제 사용 반응이 같은 방향으로 맞물린다는 점이 핵심입니다."
+        )
+    else:
+        insight = (
+            f"사용자는 {product} 사용에서 '{focus_point}'가 자동·안정적으로 해결되길 기대하지만, 실제 경험에서는 해당 지점의 마찰이 반복되어 기대와 현실의 괴리가 커지고 있습니다. "
+            f"영상 맥락({theme_hint})과 댓글에서 드러난 실사용 경험 사이의 간격이 불만의 핵심 배경입니다."
+        )
+
+    supporting_signals: list[str] = []
+    if representative_evidence:
+        supporting_signals.append(f"대표 코멘트에서 '{representative_evidence}'처럼 문제 체감이 구체적으로 언급됩니다.")
+    if similar_count >= 3:
+        supporting_signals.append(
+            f"현재 필터 기준 동일 주장 방향·문제 인식의 유사 댓글이 {similar_count:,}건 확인되어 일회성 반응으로 보기 어렵습니다."
+        )
+    top_points = video_signals.get("top_points", []) or []
+    if top_points:
+        supporting_signals.append(
+            f"같은 영상 반응에서도 '{', '.join(top_points[:2])}' 포인트가 반복돼 같은 문제 구조가 재확인됩니다."
+        )
+    if sentiment_name == "negative":
+        supporting_signals.append(
+            f"동일 영상 맥락에서 부정 반응 비중이 {neg_share * 100:.1f}%로, 긍정({pos_share * 100:.1f}%) 대비 높은 편입니다."
+        )
+    elif sentiment_name == "positive":
+        supporting_signals.append(
+            f"동일 영상 맥락에서 긍정 반응 비중이 {pos_share * 100:.1f}%이며, 핵심 강점이 반복 확인됩니다."
+        )
+    else:
+        supporting_signals.append(
+            f"동일 영상 맥락에서 부정 {neg_share * 100:.1f}% / 긍정 {pos_share * 100:.1f}%로 혼합 반응이 관찰됩니다."
+        )
+
+    supporting_signals = [item for item in supporting_signals if _safe_text(item)]
+    if len(supporting_signals) < 2:
+        supporting_signals.append(f"핵심 포인트 '{focus_point}'는 대표 코멘트와 영상 맥락 모두에서 확인됩니다.")
+
+    return {
+        "insight": insight,
+        "supporting_signals": supporting_signals[:4],
+    }
+
+
 def _build_resolution_point(
     working_selected: pd.Series | str,
     sentiment_name: str | list[str],
@@ -4308,6 +4435,8 @@ def _render_representative_nlp_panel(
     display_text: str,
     source_comments: pd.DataFrame | None = None,
     negative_context: dict[str, str] | None = None,
+    similar_comments: pd.DataFrame | None = None,
+    insight_registry: dict[str, set[str]] | None = None,
 ) -> None:
     sentiment_value = _resolve_sentiment_for_card(working_selected, sentiment_name)
     sentiment_map = {"positive": "긍정", "negative": "부정", "neutral": "중립", "trash": "스팸"}
@@ -4433,6 +4562,23 @@ def _render_representative_nlp_panel(
         inquiry_flag=inquiry_flag,
         negative_context=negative_context,
     )
+    insight_layer = _build_insight_layer(
+        working_selected=working_selected,
+        sentiment_name=sentiment_value,
+        aspect_label=aspect_label,
+        keywords=core_points or keywords,
+        source_comments=source_comments,
+        similar_comments=similar_comments,
+        insight_registry=insight_registry,
+    )
+    insight_text = _safe_text(insight_layer.get("insight", ""))
+    supporting_signal_items = insight_layer.get("supporting_signals", [])
+    if not isinstance(supporting_signal_items, list):
+        supporting_signal_items = []
+    supporting_signal_items = [_safe_text(item) for item in supporting_signal_items if _safe_text(item)][:4]
+    supporting_signals_html = "".join(
+        f"<li>{html.escape(item)}</li>" for item in supporting_signal_items
+    ) or "<li>근거 신호를 충분히 확보하지 못해 추가 검토가 필요합니다.</li>"
 
     fill_color = {"negative": "#ef4444", "positive": "#3b82f6", "neutral": "#8b5cf6", "trash": "#64748b"}.get(sentiment_value, "#3b82f6")
     keywords_html = "".join(f'<span class="rep-ai-kw">{html.escape(keyword)}</span>' for keyword in keywords)
@@ -4486,6 +4632,13 @@ def _render_representative_nlp_panel(
           </div>
           <div class="rep-ai-insight"><strong>영상 맥락 인사이트</strong><br>{html.escape(context_insight)}</div>
           <div class="rep-ai-action"><strong>해결 포인트</strong><br>{html.escape(action_point)}</div>
+          <div class="rep-ai-insight"><strong>인사이트 레이어</strong><br>{html.escape(insight_text)}</div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">보조 신호</div>
+            <div class="rep-ai-box">
+              <ul style="margin:0; padding-left:18px;">{supporting_signals_html}</ul>
+            </div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -4505,6 +4658,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
         return
 
     top_rows = comment_showcase.reset_index(drop=True)
+    insight_registry: dict[str, set[str]] = {}
     for idx, selected in top_rows.iterrows():
         with st.container(border=True):
             # --- Data extraction ---
@@ -4576,6 +4730,8 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                 display_text=display_text,
                 source_comments=source_comments,
                 negative_context=negative_context,
+                similar_comments=similar_comments,
+                insight_registry=insight_registry,
             )
 
             # ============================================================
