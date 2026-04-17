@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.analytics.brands import infer_brand
 from src.analytics.comment_analysis import analyze_comment_with_context
+from src.analytics.comment_truth import CANONICAL_COMMENT_TRUTH_COLUMNS, build_canonical_comment_truth
 from src.analytics.insight_engine import (
     build_inquiry_summary,
     build_keyword_insight_summary,
@@ -205,12 +206,44 @@ class AnalyticsPipeline:
             for column in _empty_cols:
                 working_comments[column] = pd.NA
 
-        working_comments["sentiment_label"] = working_comments["sentiment_label"].where(working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"), pd.NA)
+        working_comments["sentiment_label"] = working_comments["sentiment_label"].where(
+            working_comments.get("comment_validity", pd.Series(index=working_comments.index, dtype=object)).eq("valid"),
+            pd.NA,
+        )
+
+        comment_truth = build_canonical_comment_truth(working_comments)
+        working_comments = self._merge_canonical_truth(working_comments, comment_truth)
+        analysis_comments = self._merge_canonical_truth(analysis_comments, comment_truth)
+        analysis_included_series = (
+            analysis_comments["analysis_included"]
+            if "analysis_included" in analysis_comments.columns
+            else pd.Series(False, index=analysis_comments.index)
+        )
+        analysis_comments = analysis_comments[analysis_included_series.fillna(False)].copy()
+        if not analysis_comments.empty and "sentiment_final" in analysis_comments.columns:
+            analysis_comments["sentiment_label"] = analysis_comments["sentiment_final"].fillna(analysis_comments.get("sentiment_label"))
+
+        hygiene_series = (
+            analysis_comments["hygiene_class"]
+            if "hygiene_class" in analysis_comments.columns
+            else pd.Series("strategic", index=analysis_comments.index)
+        )
+        analysis_non_trash = analysis_comments[hygiene_series.fillna("trash").astype(str).str.lower().ne("trash")].copy()
+        strategic_series = (
+            analysis_non_trash["hygiene_class"]
+            if "hygiene_class" in analysis_non_trash.columns
+            else pd.Series("strategic", index=analysis_non_trash.index)
+        )
+        analysis_strategic = analysis_non_trash[strategic_series.fillna("").astype(str).str.lower().eq("strategic")].copy()
 
         metrics = build_descriptive_metrics(videos_with_relevance, working_comments)
-        opinion_units = build_opinion_units(analysis_comments)
+        opinion_units = build_opinion_units(analysis_strategic)
         if not opinion_units.empty:
             source_counts = opinion_units.groupby("source_content_id").agg(opinion_count=("opinion_id", "count")).reset_index()
+            analysis_non_trash = analysis_non_trash.merge(source_counts, left_on="comment_id", right_on="source_content_id", how="left")
+            analysis_non_trash.drop(columns=["source_content_id"], inplace=True, errors="ignore")
+            analysis_non_trash["source_count"] = 1
+            analysis_non_trash["opinion_count"] = analysis_non_trash["opinion_count"].fillna(1).astype(int)
             analysis_comments = analysis_comments.merge(source_counts, left_on="comment_id", right_on="source_content_id", how="left")
             analysis_comments.drop(columns=["source_content_id"], inplace=True, errors="ignore")
             analysis_comments["source_count"] = 1
@@ -220,6 +253,8 @@ class AnalyticsPipeline:
             working_comments["source_count"] = 1
             working_comments["opinion_count"] = working_comments["opinion_count"].fillna(1).astype(int)
         else:
+            analysis_non_trash["source_count"] = 1
+            analysis_non_trash["opinion_count"] = 1
             analysis_comments["source_count"] = 1
             analysis_comments["opinion_count"] = 1
             working_comments["source_count"] = 1
@@ -230,29 +265,31 @@ class AnalyticsPipeline:
         representative_section = build_representative_section_payload(representative_bundles)
         monitoring_summary = self._monitoring_summary(opinion_units)
         reporting_summary = self._reporting_summary(opinion_units)
-        keyword_df = extract_keywords(analysis_comments["cleaned_text"] if not analysis_comments.empty else pd.Series(dtype=str), self.top_n_keywords)
-        sentiment_summary = self._summary_by_label(analysis_comments, "sentiment_label")
-        topic_summary = self._summary_by_label(analysis_comments, "topic_label")
-        representative_comments = self._representative_comments(analysis_comments)
-        outlier_comments = analysis_comments.sort_values(["like_count", "text_length"], ascending=False).head(20) if not analysis_comments.empty else pd.DataFrame()
-        weekly_sentiment_trend = build_weekly_sentiment_trend(analysis_comments)
-        weekly_keyword_trend = build_weekly_keyword_trend(analysis_comments)
+        keyword_df = extract_keywords(analysis_strategic["cleaned_text"] if not analysis_strategic.empty else pd.Series(dtype=str), self.top_n_keywords)
+        sentiment_summary = self._summary_by_label(analysis_non_trash, "sentiment_label")
+        topic_summary = self._summary_by_label(analysis_non_trash, "topic_label")
+        representative_comments = self._representative_comments(analysis_strategic)
+        outlier_comments = analysis_non_trash.sort_values(["like_count", "text_length"], ascending=False).head(20) if not analysis_non_trash.empty else pd.DataFrame()
+        weekly_sentiment_trend = build_weekly_sentiment_trend(analysis_non_trash)
+        weekly_keyword_trend = build_weekly_keyword_trend(analysis_non_trash)
         new_issue_keywords, persistent_issue_keywords = build_issue_keyword_status(weekly_keyword_trend)
-        brand_ratio = self._brand_ratio(analysis_comments)
-        cej_negative_rate = self._cej_negative_rate(analysis_comments)
-        negative_density = self._negative_density(videos_with_relevance, analysis_comments)
+        brand_ratio = self._brand_ratio(analysis_non_trash)
+        cej_negative_rate = self._cej_negative_rate(analysis_non_trash)
+        negative_density = self._negative_density(videos_with_relevance, analysis_non_trash)
 
         # insight_engine aggregation from nlp_analyzer results
-        nlp_topic_insights = build_topic_insight_summary(analysis_comments)
-        nlp_keyword_insights = build_keyword_insight_summary(analysis_comments)
-        nlp_inquiry_summary = build_inquiry_summary(analysis_comments)
-        nlp_product_mentions = build_product_mention_summary(analysis_comments)
-        nlp_sentiment_dist = build_nlp_sentiment_summary(analysis_comments)
+        nlp_topic_insights = build_topic_insight_summary(analysis_non_trash)
+        nlp_keyword_insights = build_keyword_insight_summary(analysis_non_trash)
+        nlp_inquiry_summary = build_inquiry_summary(analysis_non_trash)
+        nlp_product_mentions = build_product_mention_summary(analysis_non_trash)
+        nlp_sentiment_dist = build_nlp_sentiment_summary(analysis_non_trash)
 
         outputs = {
             **metrics,
             "comments": working_comments,
+            "comment_truth": comment_truth,
             "analysis_comments": analysis_comments,
+            "analysis_non_trash": analysis_non_trash,
             "opinion_units": opinion_units,
             "representative_bundles": representative_bundles,
             "monitoring_summary": monitoring_summary,
@@ -311,6 +348,15 @@ class AnalyticsPipeline:
         if not video_columns:
             return comments_df.copy()
         return comments_df.merge(videos_df[video_columns].drop_duplicates(subset=["video_id"]), on="video_id", how="left")
+
+    @staticmethod
+    def _merge_canonical_truth(frame: pd.DataFrame, comment_truth: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty or comment_truth.empty or "comment_id" not in frame.columns:
+            return frame
+        merge_columns = [column for column in CANONICAL_COMMENT_TRUTH_COLUMNS if column not in {"comment_id", "video_id"}]
+        working = frame.drop(columns=merge_columns, errors="ignore").copy()
+        payload_columns = [column for column in ["comment_id", *merge_columns] if column in comment_truth.columns]
+        return working.merge(comment_truth[payload_columns], on="comment_id", how="left")
 
     def _annotate_video_relevance(self, videos_df: pd.DataFrame) -> pd.DataFrame:
         if videos_df.empty:
@@ -450,21 +496,38 @@ class AnalyticsPipeline:
         if comments_df.empty:
             return pd.DataFrame()
         working = comments_df.copy()
+        if "analysis_included" in working.columns:
+            working = working[working["analysis_included"].fillna(False)].copy()
+        if "hygiene_class" in working.columns:
+            hygiene = working["hygiene_class"].fillna("").astype(str).str.lower()
+            working = working[hygiene.ne("trash")].copy()
+        if "representative_eligibility" in working.columns:
+            eligibility = working["representative_eligibility"].fillna(False)
+            # Canonical representative source must remain comment-level truth.
+            working = working[eligibility.astype(bool)].copy()
         if "representative_decision" in working.columns:
             working = working[working["representative_decision"].isin(["strong_candidate", "review_needed"])].copy()
         if "classification_type" in working.columns:
             working = working[working["classification_type"].fillna("").astype(str).str.lower().ne("informational")].copy()
         if "product_related" in working.columns:
             working = working[working["product_related"].fillna(False)].copy()
-        if "text_display" in working.columns:
-            working = working[~working["text_display"].fillna("").map(_looks_like_inquiry)].copy()
         if working.empty:
             return pd.DataFrame()
 
+        sentiment_canonical = (
+            working.get("sentiment_final", working.get("sentiment_label", pd.Series("neutral", index=working.index)))
+            .fillna(working.get("sentiment_label", pd.Series("neutral", index=working.index)))
+            .astype(str)
+            .str.lower()
+        )
+        allowed_sentiments = {"positive", "negative", "neutral", "mixed"}
+        working["_sentiment_canonical"] = sentiment_canonical.where(sentiment_canonical.isin(allowed_sentiments), "neutral")
+        working["sentiment_label"] = working["_sentiment_canonical"]
+
         frames = []
         decision_rank = {"strong_candidate": 0, "review_needed": 1, "not_suitable": 2}
-        for label in ["positive", "negative", "neutral"]:
-            subset = working[working["sentiment_label"] == label].copy()
+        for label in ["negative", "positive", "mixed", "neutral"]:
+            subset = working[working["_sentiment_canonical"] == label].copy()
             if subset.empty:
                 continue
             if "representative_decision" in subset.columns:
@@ -473,18 +536,25 @@ class AnalyticsPipeline:
                 subset["_decision_rank"] = 9
             if "representative_score" not in subset.columns:
                 subset["representative_score"] = 0
+            cej_source = subset.get("customer_journey_stage", subset.get("cej_scene_code", pd.Series("", index=subset.index)))
+            subset["_journey_relevance"] = cej_source.fillna("").astype(str).map(lambda value: 0 if value.strip() in {"", "S10 Other", "기타"} else 1)
+            subset["_sentiment_strength"] = pd.to_numeric(subset.get("sentiment_score", pd.Series(0.0, index=subset.index)), errors="coerce").fillna(0.0).abs()
             subset["_dedup_key"] = subset.apply(
                 lambda row: "|".join([
-                    str(row.get("cluster_id", "")) if pd.notna(row.get("cluster_id", "")) else "",
                     str(row.get("product", "")) if pd.notna(row.get("product", "")) else "",
+                    str(row.get("customer_journey_stage", row.get("cej_scene_code", ""))) if pd.notna(row.get("customer_journey_stage", row.get("cej_scene_code", ""))) else "",
                     (str(row.get("topic_label")) if pd.notna(row.get("topic_label")) else "") or (str(row.get("classification_type")) if pd.notna(row.get("classification_type")) else "general") or "general",
                     _canonical_representative_text(row.get("cleaned_text", row.get("text_display", ""))),
                 ]),
                 axis=1,
             )
-            subset = subset.sort_values(["_decision_rank", "representative_score", "like_count", "sentiment_score"], ascending=[True, False, False, label != "negative"])
+            subset = subset.sort_values(
+                ["_decision_rank", "_journey_relevance", "representative_score", "like_count", "_sentiment_strength"],
+                ascending=[True, False, False, False, False],
+                na_position="last",
+            )
             subset = subset.drop_duplicates(subset=["_dedup_key"], keep="first").head(8)
-            frames.append(subset.drop(columns=["_decision_rank", "_dedup_key"], errors="ignore"))
+            frames.append(subset.drop(columns=["_decision_rank", "_journey_relevance", "_sentiment_strength", "_dedup_key"], errors="ignore"))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     @staticmethod

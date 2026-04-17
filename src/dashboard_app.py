@@ -109,6 +109,7 @@ DASHBOARD_DATASETS: tuple[tuple[str, str], ...] = (
     ("representative_bundles", "representative_bundles.parquet"),
     ("opinion_units", "opinion_units.parquet"),
     ("analysis_comments", "analysis_comments.parquet"),
+    ("analysis_non_trash", "analysis_non_trash.parquet"),
     ("nlp_topic_insights", "nlp_topic_insights.parquet"),
     ("nlp_keyword_insights", "nlp_keyword_insights.parquet"),
     ("nlp_inquiry_summary", "nlp_inquiry_summary.parquet"),
@@ -307,6 +308,7 @@ SAMPLE_MAX_RUNS = 6
 SAMPLE_MAX_ROWS = {
     "comments": 3000,
     "analysis_comments": 3000,
+    "analysis_non_trash": 3000,
     "opinion_units": 4500,
     "videos": 400,
 }
@@ -664,6 +666,7 @@ def _build_synthetic_sample_bundle() -> dict[str, pd.DataFrame]:
     bundle = _empty_dashboard_bundle()
     bundle["comments"] = comments
     bundle["analysis_comments"] = comments.copy()
+    bundle["analysis_non_trash"] = comments.copy()
     bundle["videos"] = videos
     bundle["quality_summary"] = quality_summary
     bundle["opinion_units"] = opinion_units
@@ -1088,14 +1091,29 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
         included_comments = working[working["analysis_included"] == True].copy()
         if not included_comments.empty:
             working = included_comments
+    if "hygiene_class" in working.columns:
+        non_trash = working[working["hygiene_class"].fillna("").astype(str).str.lower().ne("trash")].copy()
+        if not non_trash.empty:
+            working = non_trash
+    if "representative_eligibility" in working.columns:
+        eligible_mask = working["representative_eligibility"].fillna(False).astype(bool)
+        if eligible_mask.any():
+            working = working[eligible_mask].copy()
     if working.empty:
         return pd.DataFrame()
+
+    working["_canonical_sentiment"] = (
+        working.get("sentiment_final", working.get("sentiment_label", pd.Series("neutral", index=working.index)))
+        .fillna(working.get("sentiment_label", pd.Series("neutral", index=working.index)))
+        .astype(str)
+        .str.lower()
+    )
 
     # Preselect a manageable candidate pool before expensive re-analysis so the
     # representative section stays responsive even with tens of thousands of comments.
     candidate_pool = working.copy()
-    if sentiment and "sentiment_label" in candidate_pool.columns:
-        sentiment_candidates = candidate_pool[candidate_pool["sentiment_label"] == sentiment].copy()
+    if sentiment and "_canonical_sentiment" in candidate_pool.columns:
+        sentiment_candidates = candidate_pool[candidate_pool["_canonical_sentiment"] == sentiment].copy()
         if not sentiment_candidates.empty:
             candidate_pool = sentiment_candidates
     likes_seed = pd.to_numeric(candidate_pool.get("like_count", pd.Series(0, index=candidate_pool.index)), errors="coerce").fillna(0)
@@ -1139,7 +1157,7 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
     # Use pipeline outputs as the only comment-level analysis source.
     # Dashboard must not re-run a separate NLP/rule path.
     working["display_sentiment"] = (
-        working.get("sentiment_label", pd.Series("neutral", index=working.index))
+        working.get("_canonical_sentiment", pd.Series("neutral", index=working.index))
         .fillna("neutral")
         .astype(str)
         .str.lower()
@@ -1174,6 +1192,7 @@ def build_comment_showcase(frame: pd.DataFrame, sentiment: str, limit: int = 30)
         working["showcase_score"] = (sentiment_score * 100) + (like_score * 1.5) + (text_score * 0.04) + (rep_score * 2)
     else:
         working["showcase_score"] = sentiment_score.abs() * 100 + (like_score * 1.5) + (text_score * 0.04) + (rep_score * 2)
+    working = working.drop(columns=["_canonical_sentiment"], errors="ignore")
     if "comment_id" in working.columns:
         working = working.drop_duplicates(subset=["comment_id"], keep="first")
     else:
@@ -1786,9 +1805,15 @@ def _build_selection_narrative(selected: pd.Series, source_comments: pd.DataFram
     likes = int(pd.to_numeric(selected.get(COL_LIKES, 0), errors="coerce") or 0)
     original_text = _safe_text(selected.get(COL_RAW, selected.get(COL_ORIGINAL, "")))
     summary_text = _summarize_for_dashboard(selected, sentiment_name)
-    similar_comments = _collect_similar_comments_for_download(source_comments if source_comments is not None else pd.DataFrame(), selected, sentiment_name)
-    if similar_comments.empty:
-        similar_comments = _collect_similar_comments_from_samples(selected)
+    similar_comments, similar_meta = _build_canonical_similar_comments(
+        source_comments if source_comments is not None else pd.DataFrame(),
+        selected,
+        selected,
+        sentiment_name,
+        _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", "")))),
+    )
+    if similar_meta.get("cluster_size", 0):
+        cluster_size = int(similar_meta["cluster_size"])
     trend_text = _recent_trend_detail(similar_comments)
     strength_text = _score_signal_detail(original_text, sentiment_name, _safe_text(selected.get("signal_strength", "")))
     richness_text = _score_richness_detail(original_text)
@@ -1818,7 +1843,12 @@ def _negative_issue_context(selected: pd.Series, source_comments: pd.DataFrame |
     if working.empty:
         return {}
 
-    sentiment_series = working.get("sentiment_label", pd.Series("", index=working.index)).astype(str)
+    sentiment_series = (
+        working.get("sentiment_final", working.get("display_sentiment", working.get("sentiment_label", pd.Series("", index=working.index))))
+        .fillna("")
+        .astype(str)
+        .str.lower()
+    )
     negative_rows = working[sentiment_series.eq("negative")].copy()
     if negative_rows.empty:
         return {}
@@ -2310,7 +2340,15 @@ def build_raw_download_package(filtered_comments: pd.DataFrame, filtered_videos:
 
 
 
-def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, quality_df: pd.DataFrame, filters: dict[str, Any], representative_bundles_df: pd.DataFrame | None = None, opinion_units_df: pd.DataFrame | None = None) -> dict[str, Any]:
+def compute_filtered_bundle(
+    comments_df: pd.DataFrame,
+    videos_df: pd.DataFrame,
+    quality_df: pd.DataFrame,
+    filters: dict[str, Any],
+    representative_bundles_df: pd.DataFrame | None = None,
+    opinion_units_df: pd.DataFrame | None = None,
+    analysis_non_trash_df: pd.DataFrame | None = None,
+) -> dict[str, Any]:
     base_comments = comments_df.copy()
     if COL_COUNTRY not in base_comments.columns and "region" in base_comments.columns:
         base_comments[COL_COUNTRY] = base_comments["region"].map(localize_region)
@@ -2351,6 +2389,53 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     relevance_scope = str(filters.get("relevance_scope") or "전체 수집").strip() or "전체 수집"
 
     opinion_units = (opinion_units_df.copy() if opinion_units_df is not None else pd.DataFrame())
+    analysis_non_trash = (analysis_non_trash_df.copy() if analysis_non_trash_df is not None else pd.DataFrame())
+    if not analysis_non_trash.empty:
+        if COL_COUNTRY not in analysis_non_trash.columns and "region" in analysis_non_trash.columns:
+            analysis_non_trash[COL_COUNTRY] = analysis_non_trash["region"].map(localize_region)
+        if COL_BRAND not in analysis_non_trash.columns:
+            if "brand_mentioned" in analysis_non_trash.columns:
+                analysis_non_trash[COL_BRAND] = analysis_non_trash["brand_mentioned"].map(canonicalize_brand)
+            elif "brand" in analysis_non_trash.columns:
+                analysis_non_trash[COL_BRAND] = analysis_non_trash["brand"].map(canonicalize_brand)
+        if COL_CEJ not in analysis_non_trash.columns:
+            if "customer_journey_stage" in analysis_non_trash.columns:
+                analysis_non_trash[COL_CEJ] = analysis_non_trash["customer_journey_stage"].map(canonicalize_cej)
+            elif "cej_scene_code" in analysis_non_trash.columns:
+                analysis_non_trash[COL_CEJ] = analysis_non_trash["cej_scene_code"].map(canonicalize_cej)
+        analysis_included_series = analysis_non_trash.get("analysis_included", pd.Series(True, index=analysis_non_trash.index)).fillna(False).astype(bool)
+        hygiene_series = analysis_non_trash.get("hygiene_class", pd.Series("strategic", index=analysis_non_trash.index)).fillna("").astype(str).str.lower()
+        analysis_non_trash = analysis_non_trash[analysis_included_series & hygiene_series.ne("trash")].copy()
+        if products_active and "product" in analysis_non_trash.columns:
+            analysis_non_trash = analysis_non_trash[analysis_non_trash["product"].isin(products)]
+        if regions_active and COL_COUNTRY in analysis_non_trash.columns:
+            known_labels = set(REGION_LABELS.values())
+            if REGION_OTHER_LABEL in regions:
+                analysis_non_trash = analysis_non_trash[
+                    analysis_non_trash[COL_COUNTRY].isin(regions) | ~analysis_non_trash[COL_COUNTRY].isin(known_labels)
+                ]
+            else:
+                analysis_non_trash = analysis_non_trash[analysis_non_trash[COL_COUNTRY].isin(regions)]
+        if cej_active and COL_CEJ in analysis_non_trash.columns:
+            analysis_non_trash = analysis_non_trash[analysis_non_trash[COL_CEJ].isin(cej)]
+        if brands_active and COL_BRAND in analysis_non_trash.columns:
+            analysis_non_trash = analysis_non_trash[analysis_non_trash[COL_BRAND].isin(brands)]
+        if keyword_terms:
+            analysis_keyword_mask = _build_keyword_mask(analysis_non_trash, keyword_terms, keyword_mode)
+            analysis_non_trash = analysis_non_trash[analysis_keyword_mask]
+        if sentiments_active:
+            sentiment_series = analysis_non_trash.get("sentiment_final", analysis_non_trash.get("sentiment_label", pd.Series("", index=analysis_non_trash.index)))
+            localized_sentiment = sentiment_series.fillna("").astype(str).str.lower().map(localize_sentiment)
+            analysis_non_trash = analysis_non_trash[localized_sentiment.isin(sentiments)]
+        if relevance_scope == "LG 관련만":
+            if "lg_relevant_comment" in analysis_non_trash.columns:
+                analysis_non_trash = analysis_non_trash[analysis_non_trash["lg_relevant_comment"].fillna(False).astype(bool)]
+            elif "is_lg_relevant_video" in analysis_non_trash.columns:
+                analysis_non_trash = analysis_non_trash[analysis_non_trash["is_lg_relevant_video"].fillna(False).astype(bool)]
+            elif "video_lg_relevance_score" in analysis_non_trash.columns:
+                analysis_non_trash = analysis_non_trash[
+                    pd.to_numeric(analysis_non_trash["video_lg_relevance_score"], errors="coerce").fillna(0.0) >= 0.45
+                ]
     if not opinion_units.empty:
         if products_active and "product" in opinion_units.columns:
             opinion_units = opinion_units[opinion_units["product"].isin(products)]
@@ -2374,6 +2459,12 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
     inquiry_source_ids: set[str] = set()
     if not opinion_units.empty and "source_content_id" in opinion_units.columns and "inquiry_flag" in opinion_units.columns:
         inquiry_source_ids = set(opinion_units.loc[opinion_units["inquiry_flag"].fillna(False), "source_content_id"].astype(str))
+    if analysis_scope != "전체" and not analysis_non_trash.empty and "comment_id" in analysis_non_trash.columns:
+        analysis_ids = analysis_non_trash["comment_id"].astype(str)
+        if analysis_scope == "문의 포함 댓글만":
+            analysis_non_trash = analysis_non_trash[analysis_ids.isin(inquiry_source_ids)]
+        elif analysis_scope == "문의 제외":
+            analysis_non_trash = analysis_non_trash[~analysis_ids.isin(inquiry_source_ids)]
 
     if products_active:
         base_comments = base_comments[base_comments["product"].isin(products)]
@@ -2420,8 +2511,17 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         filtered_comments = filtered_comments[filtered_comments[COL_SENTIMENT].isin(sentiments)]
 
     representative_comments = base_comments.copy()
-    valid_series = representative_comments.get("comment_validity", pd.Series("valid", index=representative_comments.index))
-    representative_comments = representative_comments[valid_series.eq("valid")].copy()
+    analysis_included = representative_comments.get("analysis_included", pd.Series(True, index=representative_comments.index)).fillna(False).astype(bool)
+    representative_comments = representative_comments[analysis_included].copy()
+    hygiene_series = representative_comments.get("hygiene_class", pd.Series("strategic", index=representative_comments.index)).fillna("").astype(str).str.lower()
+    representative_comments = representative_comments[hygiene_series.ne("trash")].copy()
+    if "representative_eligibility" in representative_comments.columns:
+        eligibility_series = representative_comments["representative_eligibility"].fillna(False).astype(bool)
+        if eligibility_series.any():
+            representative_comments = representative_comments[eligibility_series].copy()
+    else:
+        valid_series = representative_comments.get("comment_validity", pd.Series("valid", index=representative_comments.index))
+        representative_comments = representative_comments[valid_series.eq("valid")].copy()
 
     representative_bundles = (representative_bundles_df.copy() if representative_bundles_df is not None else pd.DataFrame())
     if not representative_bundles.empty:
@@ -2492,6 +2592,7 @@ def compute_filtered_bundle(comments_df: pd.DataFrame, videos_df: pd.DataFrame, 
         "comments": filtered_comments,
         "all_comments": all_comments,   # ✅ 추가
         "representative_comments": representative_comments,
+        "analysis_non_trash": analysis_non_trash,
         "videos": filtered_videos,
         "representative_bundles": representative_bundles,
         "opinion_units": opinion_units,
@@ -2658,7 +2759,7 @@ def _representative_cluster_key(row: pd.Series) -> str:
     except Exception:
         pass
     return "|".join([
-        _safe_text(row.get("sentiment_label", "")),
+        _safe_text(row.get("sentiment_final", row.get("display_sentiment", row.get("sentiment_label", "")))),
         _safe_text(row.get("product", "")),
         _safe_text(row.get(COL_CEJ, row.get("topic_label", ""))),
         _safe_text(row.get("topic_label", "")) or _safe_text(row.get("classification_type", "")) or "general",
@@ -2674,7 +2775,13 @@ def _build_bundle_showcase(filtered_comments: pd.DataFrame, sentiment: str, limi
     validity = base_pool.get("comment_validity", pd.Series("valid", index=base_pool.index))
     base_pool = base_pool[validity.eq("valid")].copy()
     if sentiment:
-        base_pool = base_pool[base_pool.get("sentiment_label", pd.Series("", index=base_pool.index)).eq(sentiment)].copy()
+        canonical_sentiment = (
+            base_pool.get("sentiment_final", base_pool.get("sentiment_label", pd.Series("", index=base_pool.index)))
+            .fillna(base_pool.get("sentiment_label", pd.Series("", index=base_pool.index)))
+            .astype(str)
+            .str.lower()
+        )
+        base_pool = base_pool[canonical_sentiment.eq(sentiment)].copy()
     if base_pool.empty:
         base_pool = candidate_pool.copy()
 
@@ -2968,23 +3075,34 @@ def build_cej_trust_frame(filtered_comments: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values([COL_CEJ, "product", COL_COUNTRY, COL_BRAND], na_position="last")
 
 
-def render_representative_comments(filtered_comments: pd.DataFrame, representative_bundles: pd.DataFrame | None = None, opinion_units: pd.DataFrame | None = None, key_suffix: str = "") -> None:
+def render_representative_comments(
+    filtered_comments: pd.DataFrame,
+    representative_bundles: pd.DataFrame | None = None,
+    opinion_units: pd.DataFrame | None = None,
+    key_suffix: str = "",
+    similar_source_pool: pd.DataFrame | None = None,
+) -> None:
     st.subheader("핵심 대표 코멘트")
     st.caption("판단은 대표 코멘트에서 시작합니다. 먼저 Top 3를 빠르게 보고, 필요할 때만 상세와 유사 댓글을 펼쳐 확인하세요.")
 
-    source_for_cards = filtered_comments if filtered_comments is not None and not filtered_comments.empty else (opinion_units if opinion_units is not None else pd.DataFrame())
-    negative_showcase = _rows_from_representative_bundles(representative_bundles, sentiment="negative", limit=5) if representative_bundles is not None and not representative_bundles.empty else pd.DataFrame()
-    positive_showcase = _rows_from_representative_bundles(representative_bundles, sentiment="positive", limit=5) if representative_bundles is not None and not representative_bundles.empty else pd.DataFrame()
-
-    if negative_showcase.empty:
-        negative_showcase = _build_bundle_showcase(filtered_comments, sentiment="negative", limit=5)
-    if positive_showcase.empty:
-        positive_showcase = _build_bundle_showcase(filtered_comments, sentiment="positive", limit=5)
+    # Representative cards must be selected from comment-level canonical rows only.
+    # representative_bundles/opinion_units can remain as optional evidence artifacts.
+    source_for_cards = filtered_comments if filtered_comments is not None else pd.DataFrame()
+    # Similar comments MUST come from one canonical source pool only (analysis_non_trash).
+    canonical_similar_pool = _canonicalize_similar_source_pool(
+        similar_source_pool if similar_source_pool is not None else pd.DataFrame()
+    )
+    negative_showcase = _build_bundle_showcase(source_for_cards, sentiment="negative", limit=5)
+    positive_showcase = _build_bundle_showcase(source_for_cards, sentiment="positive", limit=5)
 
     if negative_showcase.empty and positive_showcase.empty:
-        fallback_showcase = _build_bundle_showcase(filtered_comments, sentiment="", limit=5)
+        fallback_showcase = _build_bundle_showcase(source_for_cards, sentiment="", limit=5)
         st.warning("현재 조건에서 강한 긍정/부정 대표 코멘트가 부족해, 의미 있는 유효 댓글을 우선 보여줍니다.")
-        render_comment_table(fallback_showcase, key_prefix=f"neutral{key_suffix}", source_comments=source_for_cards)
+        render_comment_table(
+            fallback_showcase,
+            key_prefix=f"neutral{key_suffix}",
+            source_comments=canonical_similar_pool,
+        )
         return
 
     export_rows: list[dict[str, Any]] = []
@@ -2993,13 +3111,12 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
             working_selected = _enrich_card_row_from_source(row.copy(), source_for_cards)
             rep_id = _safe_text(row.get("comment_id", row.get("source_content_id", row.get("opinion_id", ""))))
             video_id = _safe_text(row.get("video_id", "")) or _safe_text(working_selected.get("video_id", ""))
-            similar_comments = _build_similar_comments(
-                source_for_cards if source_for_cards is not None else pd.DataFrame(),
+            similar_comments, similar_meta = _build_canonical_similar_comments(
+                canonical_similar_pool,
                 row,
                 working_selected,
                 sentiment_name,
                 rep_id,
-                video_id,
             )
             summary_1line = _safe_text(row.get("summary_1line", "")) or _summarize_for_dashboard(working_selected, sentiment_name)
             export_rows.append(
@@ -3011,9 +3128,9 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
                     "브랜드": _safe_text(row.get(COL_BRAND, working_selected.get(COL_BRAND, ""))),
                     "요약": summary_1line,
                     "왜 대표 코멘트인가": _build_representative_selection_reason(
-                        working_selected, sentiment_name, source_for_cards, similar_count=len(similar_comments)
+                        working_selected, sentiment_name, source_for_cards, similar_count=int(similar_meta.get("cluster_size", len(similar_comments)))
                     ),
-                    "유사 댓글 수(필터 기준)": len(similar_comments),
+                    "유사 댓글 수(필터 기준)": int(similar_meta.get("cluster_size", len(similar_comments))),
                     "원문 댓글": _safe_text(working_selected.get(COL_ORIGINAL, working_selected.get("text_display", ""))),
                 }
             )
@@ -3030,155 +3147,34 @@ def render_representative_comments(filtered_comments: pd.DataFrame, representati
     st.write(f"부정 핵심 대표 이슈 {len(negative_showcase):,}건")
     _render_representative_preview_strip(negative_showcase, "negative", source_for_cards)
     with st.expander("부정 Top 3 상세 보기", expanded=True):
-        render_comment_table(negative_showcase.head(3), key_prefix=f"negative{key_suffix}", source_comments=source_for_cards)
+        render_comment_table(
+            negative_showcase.head(3),
+            key_prefix=f"negative{key_suffix}",
+            source_comments=canonical_similar_pool,
+        )
     if len(negative_showcase) > 3:
         with st.expander(f"부정 추가 이슈 {min(len(negative_showcase) - 3, 2):,}건 더 보기", expanded=False):
-            render_comment_table(negative_showcase.iloc[3:5], key_prefix=f"negative_more{key_suffix}", source_comments=source_for_cards)
+            render_comment_table(
+                negative_showcase.iloc[3:5],
+                key_prefix=f"negative_more{key_suffix}",
+                source_comments=canonical_similar_pool,
+            )
 
     st.write(f"긍정 핵심 대표 이슈 {len(positive_showcase):,}건")
     _render_representative_preview_strip(positive_showcase, "positive", source_for_cards)
     with st.expander("긍정 Top 3 상세 보기", expanded=False):
-        render_comment_table(positive_showcase.head(3), key_prefix=f"positive{key_suffix}", source_comments=source_for_cards)
+        render_comment_table(
+            positive_showcase.head(3),
+            key_prefix=f"positive{key_suffix}",
+            source_comments=canonical_similar_pool,
+        )
     if len(positive_showcase) > 3:
         with st.expander(f"긍정 추가 이슈 {min(len(positive_showcase) - 3, 2):,}건 더 보기", expanded=False):
-            render_comment_table(positive_showcase.iloc[3:5], key_prefix=f"positive_more{key_suffix}", source_comments=source_for_cards)
-
-
-def _collect_similar_comments_for_download(
-    source_comments: pd.DataFrame,
-    selected: pd.Series,
-    sentiment_name: str,
-    exclude_id: str | None = None,
-) -> pd.DataFrame:
-    if source_comments is None or source_comments.empty:
-        return pd.DataFrame()
-    working = source_comments.copy()
-    # ✅ 대표로 뽑힌 코멘트는 유사 댓글 샘플에서 제외
-    exclude_id = _safe_text(exclude_id)
-    if exclude_id:
-        if "comment_id" in working.columns:
-            working = working[working["comment_id"].astype(str) != exclude_id].copy()
-        if "source_content_id" in working.columns:
-            working = working[working["source_content_id"].astype(str) != exclude_id].copy()
-        if "opinion_id" in working.columns:
-            working = working[working["opinion_id"].astype(str) != exclude_id].copy()
-    # ✅ 텍스트가 완전히 동일한 경우도 제외(보조 안전장치)
-    selected_text = _safe_text(selected.get(COL_ORIGINAL, selected.get("text_display", "")))
-    selected_raw = _safe_text(selected.get(COL_RAW, selected.get("text_original", "")))
-    if selected_text:
-        for col in [COL_ORIGINAL, "text_display", "original_text", "display_text"]:
-            if col in working.columns:
-                working = working[working[col].astype(str) != selected_text].copy()
-    if selected_raw:
-        for col in [COL_RAW, "text_original", "raw_text"]:
-            if col in working.columns:
-                working = working[working[col].astype(str) != selected_raw].copy()
-
-
-    if sentiment_name in {"negative", "positive", "neutral"}:
-        if "sentiment_code" in working.columns:
-            working = working[working["sentiment_code"].astype(str).eq(sentiment_name)].copy()
-        else:
-            sentiment_series = working.get("sentiment_label", pd.Series("", index=working.index))
-            working = working[sentiment_series.astype(str).eq(sentiment_name)].copy()
-
-    topic_value = _safe_text(selected.get("topic_label", "")) or _safe_text(selected.get("aspect_key", ""))
-    if topic_value:
-        if "aspect_key" in working.columns:
-            working = working[working["aspect_key"].astype(str).eq(topic_value)].copy()
-        elif "topic_label" in working.columns:
-            working = working[working["topic_label"].astype(str).eq(topic_value)].copy()
-
-    product_value = _safe_text(selected.get("product", ""))
-    if product_value and "product" in working.columns:
-        working = working[working["product"].astype(str).eq(product_value)].copy()
-
-    cej_value = _safe_text(selected.get(COL_CEJ, ""))
-    if cej_value:
-        scene_map = {
-            "인지": "S1 Aware",
-            "탐색": "S2 Explore",
-            "결정": "S3 Decide",
-            "구매": "S4 Purchase",
-            "배송": "S5 Deliver",
-            "사용준비": "S6 On-board",
-            "사용": "S7 Use",
-            "관리": "S8 Maintain",
-            "교체": "S9 Replace",
-            "기타": "S10 Other",
-        }
-        if "cej_scene_code" in working.columns:
-            working = working[working["cej_scene_code"].astype(str).eq(scene_map.get(cej_value, cej_value))].copy()
-        elif COL_CEJ in working.columns:
-            working = working[working[COL_CEJ].astype(str).eq(cej_value)].copy()
-
-    brand_value = _safe_text(selected.get(COL_BRAND, ""))
-    if brand_value:
-        if "brand_mentioned" in working.columns:
-            working = working[working["brand_mentioned"].map(canonicalize_brand).astype(str).eq(brand_value)].copy()
-        elif COL_BRAND in working.columns:
-            working = working[working[COL_BRAND].astype(str).eq(brand_value)].copy()
-
-    if working.empty:
-        return working
-
-    like_col = COL_LIKES if COL_LIKES in working.columns else ("likes_count" if "likes_count" in working.columns else "like_count")
-    if like_col not in working.columns:
-        like_col = None
-    sort_cols = [c for c in [like_col, "text_length", COL_WRITTEN_AT, "published_at"] if c and c in working.columns]
-    sort_working = working.sort_values(sort_cols, ascending=[False] * len(sort_cols), na_position="last") if sort_cols else working.copy()
-
-    display_rows = []
-    seen = set()
-    for _, sample in sort_working.iterrows():
-        sample_original = _safe_text(sample.get(COL_ORIGINAL, sample.get("original_text", sample.get("display_text", sample.get("text_display", sample.get("opinion_text", ""))))))
-        unique_id = _safe_text(sample.get("comment_id", sample.get("opinion_id", ""))) or sample_original
-        if unique_id in seen or not sample_original:
-            continue
-        seen.add(unique_id)
-        sample_language = _safe_text(sample.get(COL_LANGUAGE, sample.get("language_detected", ""))).lower()
-        sample_is_korean = sample_language.startswith("ko") or _looks_korean_text(sample_original)
-        sample_translation = _resolve_card_translation(sample_original, _safe_text(sample.get(COL_TRANSLATION, sample.get("translated_text", ""))), sample_is_korean)
-        written_at = _safe_text(sample.get(COL_WRITTEN_AT, sample.get("published_at", "")))
-        display_rows.append({
-            "comment_id": unique_id,
-            "원문": sample_original,
-            "번역(참고)": "" if sample_is_korean else sample_translation,
-            "좋아요 수": int(pd.to_numeric(sample.get(COL_LIKES, sample.get("likes_count", sample.get("like_count", 0))), errors="coerce") or 0),
-            "PII": "있음" if _safe_text(sample.get("pii_flag", "N")) == "Y" else "없음",
-            "작성일시": written_at,
-        })
-    return pd.DataFrame(display_rows)
-
-
-def _collect_similar_comments_from_samples(selected: pd.Series) -> pd.DataFrame:
-    try:
-        sample_items = json.loads(_safe_text(selected.get("sample_comments_json", "[]")) or "[]")
-    except Exception:
-        sample_items = []
-
-    rows = []
-    seen = set()
-
-    for idx, item in enumerate(sample_items):
-        original_text = _safe_text(item.get("original_text", item.get("display_text", "")))
-        translated_text = _safe_text(item.get("translated_text", ""))
-        unique_id = _safe_text(item.get("opinion_id", item.get("comment_id", ""))) or original_text or f"sample_{idx}"
-
-        if not original_text or unique_id in seen:
-            continue
-        seen.add(unique_id)
-
-        rows.append({
-            "comment_id": unique_id,
-            "원문": original_text,
-            "번역(참고)": translated_text,
-            "좋아요 수": int(pd.to_numeric(item.get("likes_count", 0), errors="coerce") or 0),
-            "PII": "있음" if _safe_text(item.get("pii_flag", "N")) == "Y" else "없음",
-            "작성일시": _safe_text(item.get("written_at", "")),
-        })
-
-    return pd.DataFrame(rows)
+            render_comment_table(
+                positive_showcase.iloc[3:5],
+                key_prefix=f"positive_more{key_suffix}",
+                source_comments=canonical_similar_pool,
+            )
 
 
 def _infer_claim_direction(text_value: str) -> int:
@@ -3202,216 +3198,193 @@ def _infer_claim_direction(text_value: str) -> int:
     return 0
 
 
-def _build_similar_comments(
-    pool: pd.DataFrame,
+def _normalize_topic_for_similarity(value: Any) -> str:
+    text = _safe_text(value).strip()
+    if not text:
+        return ""
+    if re.match(r"^(이슈\s*\d+|issue\s*\d+)$", text.lower()):
+        return "제품 경험"
+    return _safe_text(_localize_aspect_label(text)).strip().lower()
+
+
+def _normalize_sentiment_direction(value: Any) -> str:
+    sentiment = _safe_text(value).strip().lower()
+    if sentiment in {"positive", "negative", "neutral", "mixed"}:
+        return sentiment
+    localized_map = {
+        localize_sentiment("positive").lower(): "positive",
+        localize_sentiment("negative").lower(): "negative",
+        localize_sentiment("neutral").lower(): "neutral",
+        "혼합": "mixed",
+        "mixed": "mixed",
+    }
+    if sentiment in localized_map:
+        return localized_map[sentiment]
+    return "neutral"
+
+
+def _journey_value_from_row(row: pd.Series) -> str:
+    for key in ["journey_stage", COL_CEJ, "customer_journey_stage", "cej_scene_code"]:
+        if key in row.index:
+            value = canonicalize_cej(_safe_text(row.get(key, "")))
+            if value:
+                return value
+    return ""
+
+
+def _coerce_comment_id_from_row(row: pd.Series) -> str:
+    for key in ["comment_id", "source_content_id", "opinion_id"]:
+        value = _safe_text(row.get(key, ""))
+        if value:
+            return value
+    return ""
+
+
+def _intent_tokens_from_row(row: pd.Series) -> set[str]:
+    tokens: set[str] = set()
+    tokens.update(_clean_point_tokens(_parse_list_like(row.get("nlp_similarity_keys", [])), limit=10))
+    tokens.update(_clean_point_tokens(_parse_list_like(row.get("nlp_core_points", [])), limit=10))
+    tokens.update(_clean_point_tokens(_parse_list_like(row.get("nlp_context_tags", [])), limit=6))
+    classification = _safe_text(row.get("classification_type", "")).strip().lower()
+    if classification:
+        tokens.add(classification)
+    topic_norm = _normalize_topic_for_similarity(row.get("topic_label", row.get("aspect_key", "")))
+    if topic_norm:
+        tokens.add(topic_norm)
+    return {token for token in tokens if token}
+
+
+def _canonicalize_similar_source_pool(pool: pd.DataFrame) -> pd.DataFrame:
+    if pool is None or pool.empty:
+        return pd.DataFrame()
+    working = pool.copy()
+    included_series = working.get("analysis_included", pd.Series(True, index=working.index)).fillna(False).astype(bool)
+    hygiene_series = working.get("hygiene_class", pd.Series("strategic", index=working.index)).fillna("").astype(str).str.lower()
+    if "comment_validity" in working.columns:
+        valid_series = working["comment_validity"].fillna("").astype(str).str.lower().eq("valid")
+    else:
+        valid_series = pd.Series(True, index=working.index)
+    return working[included_series & hygiene_series.ne("trash") & valid_series].copy()
+
+
+def _build_canonical_similar_comments(
+    analysis_non_trash: pd.DataFrame,
     selected: pd.Series,
     working_selected: pd.Series,
     sentiment_name: str,
     rep_id: str,
-    video_id: str,
-) -> pd.DataFrame:
-    """Build a DataFrame of similar comments for a representative comment card."""
-    if pool.empty:
-        return pd.DataFrame()
-    working_pool = pool.copy()
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Single canonical similar-comment builder used by card/expander/CSV."""
+    source_pool = _canonicalize_similar_source_pool(analysis_non_trash)
+    if source_pool.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "empty_source_pool"}
 
-    def _video_key(value: Any) -> str:
-        text = _safe_text(value)
-        if not text:
-            return ""
-        for pattern in [r"[?&]v=([A-Za-z0-9_-]{6,})", r"youtu\.be/([A-Za-z0-9_-]{6,})", r"/shorts/([A-Za-z0-9_-]{6,})"]:
-            matched = re.search(pattern, text)
-            if matched:
-                return matched.group(1)
-        return ""
+    working = source_pool.copy()
+    if rep_id and "comment_id" in working.columns:
+        working = working[working["comment_id"].astype(str) != rep_id].copy()
+    selected_text = _safe_text(working_selected.get(COL_ORIGINAL, selected.get(COL_ORIGINAL, "")))
+    if selected_text and COL_ORIGINAL in working.columns:
+        working = working[working[COL_ORIGINAL].astype(str) != selected_text].copy()
+    if working.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "no_candidates_after_exclusion"}
 
-    def _soft_filter(frame: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-        """Apply metadata filter only when it keeps enough candidates."""
-        candidate = frame[mask.fillna(False)].copy()
-        return candidate if len(candidate) >= 3 else frame
+    selected_journey = _journey_value_from_row(working_selected)
+    if not selected_journey:
+        selected_journey = _journey_value_from_row(selected)
+    if selected_journey:
+        journey_mask = working.apply(lambda row: _journey_value_from_row(row) == selected_journey, axis=1)
+        working = working[journey_mask].copy()
+    if working.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "journey_mismatch"}
 
-    def _normalize_topic(value: Any) -> str:
-        text = _safe_text(value).strip()
-        if not text:
-            return ""
-        if re.match(r"^(이슈\s*\d+|issue\s*\d+)$", text.lower()):
-            return "제품 경험"
-        return _safe_text(_localize_aspect_label(text)).strip().lower()
-
-    video_link_for_filter = _safe_text(working_selected.get(COL_VIDEO_LINK, selected.get(COL_VIDEO_LINK, "")))
-    if video_id:
-        mask = pd.Series(False, index=working_pool.index)
-        if "video_id" in working_pool.columns:
-            mask = mask | working_pool["video_id"].astype(str).eq(video_id)
-        if COL_VIDEO_LINK in working_pool.columns:
-            mask = mask | working_pool[COL_VIDEO_LINK].map(_video_key).eq(video_id)
-        if "video_url" in working_pool.columns:
-            mask = mask | working_pool["video_url"].map(_video_key).eq(video_id)
-        candidate = working_pool[mask].copy()
-        if not candidate.empty:
-            working_pool = candidate
-    elif video_link_for_filter:
-        video_key = _video_key(video_link_for_filter)
-        if video_key:
-            mask = pd.Series(False, index=working_pool.index)
-            if "video_id" in working_pool.columns:
-                mask = mask | working_pool["video_id"].astype(str).eq(video_key)
-            if COL_VIDEO_LINK in working_pool.columns:
-                mask = mask | working_pool[COL_VIDEO_LINK].map(_video_key).eq(video_key)
-            if "video_url" in working_pool.columns:
-                mask = mask | working_pool["video_url"].map(_video_key).eq(video_key)
-            candidate = working_pool[mask].copy()
-            if not candidate.empty:
-                working_pool = candidate
-        else:
-            if COL_VIDEO_LINK in working_pool.columns:
-                candidate = working_pool[working_pool[COL_VIDEO_LINK].astype(str) == video_link_for_filter].copy()
-                if not candidate.empty:
-                    working_pool = candidate
-            elif "video_url" in working_pool.columns:
-                candidate = working_pool[working_pool["video_url"].astype(str) == video_link_for_filter].copy()
-                if not candidate.empty:
-                    working_pool = candidate
-
-    if "comment_validity" in working_pool.columns:
-        working_pool = working_pool[working_pool["comment_validity"].astype(str) == "valid"].copy()
-    if "sentiment_label" in working_pool.columns:
-        working_pool = working_pool[working_pool["sentiment_label"].astype(str) == sentiment_name].copy()
-    elif "sentiment_code" in working_pool.columns:
-        working_pool = working_pool[working_pool["sentiment_code"].astype(str) == sentiment_name].copy()
-
-    if rep_id:
-        for key in ["comment_id", "source_content_id", "opinion_id"]:
-            if key in working_pool.columns:
-                working_pool = working_pool[working_pool[key].astype(str) != rep_id].copy()
-
-    # Narrow by metadata only when each step still keeps enough candidates.
-    # This keeps bundle-path cards from collapsing to zero due to label mismatch.
-    narrowed = working_pool.copy()
-    topic_value = _safe_text(working_selected.get("topic_label", working_selected.get("aspect_key", selected.get("topic_label", selected.get("aspect_key", "")))))
-    topic_norm = _normalize_topic(topic_value)
-    if topic_norm:
-        topic_series = pd.Series("", index=narrowed.index)
-        if "topic_label" in narrowed.columns:
-            topic_series = narrowed["topic_label"]
-        elif "aspect_key" in narrowed.columns:
-            topic_series = narrowed["aspect_key"]
-        if not topic_series.empty:
-            narrowed = _soft_filter(narrowed, topic_series.map(_normalize_topic).eq(topic_norm))
-
-    product_value = canonicalize_product_label(_safe_text(working_selected.get("product", selected.get("product", ""))))
-    if product_value and "product" in narrowed.columns:
-        narrowed = _soft_filter(narrowed, narrowed["product"].map(canonicalize_product_label).eq(product_value))
-
-    cej_value = canonicalize_cej(_safe_text(working_selected.get(COL_CEJ, selected.get(COL_CEJ, ""))))
-    if cej_value:
-        if COL_CEJ in narrowed.columns:
-            narrowed = _soft_filter(narrowed, narrowed[COL_CEJ].map(canonicalize_cej).eq(cej_value))
-        elif "cej_scene_code" in narrowed.columns:
-            narrowed = _soft_filter(narrowed, narrowed["cej_scene_code"].map(canonicalize_cej).eq(cej_value))
-
-    brand_value = canonicalize_brand(_safe_text(working_selected.get(COL_BRAND, selected.get(COL_BRAND, ""))))
-    if brand_value and brand_value != "미언급":
-        if COL_BRAND in narrowed.columns:
-            narrowed = _soft_filter(narrowed, narrowed[COL_BRAND].map(canonicalize_brand).eq(brand_value))
-        elif "brand_mentioned" in narrowed.columns:
-            narrowed = _soft_filter(narrowed, narrowed["brand_mentioned"].map(canonicalize_brand).eq(brand_value))
-
-    selected_sim_keys = set(_parse_list_like(selected.get("nlp_similarity_keys", [])))
-    selected_sim_keys.update(_parse_list_like(working_selected.get("nlp_similarity_keys", [])))
-    selected_core_points = set(_clean_point_tokens(_parse_list_like(selected.get("nlp_core_points", [])), limit=8))
-    selected_core_points.update(_clean_point_tokens(_parse_list_like(working_selected.get("nlp_core_points", [])), limit=8))
-    if not selected_core_points:
-        selected_core_points.update(_extract_card_keywords(working_selected, sentiment_name, limit=5))
-
-    selected_direction = _infer_claim_direction(
-        " ".join(
-            [
-                _safe_text(working_selected.get(COL_ORIGINAL, "")),
-                _safe_text(working_selected.get("nlp_summary", "")),
-                _safe_text(working_selected.get("classification_reason", "")),
-            ]
+    selected_sentiment = _normalize_sentiment_direction(
+        working_selected.get(
+            "sentiment_final",
+            working_selected.get(
+                "sentiment_label",
+                selected.get(
+                    "sentiment_final",
+                    selected.get("sentiment_label", sentiment_name),
+                ),
+            ),
         )
     )
-
-    def _score_issue_overlap(row: pd.Series) -> int:
-        score = 0
-        if selected_sim_keys and "nlp_similarity_keys" in row.index:
-            overlap = len(selected_sim_keys.intersection(set(_parse_list_like(row.get("nlp_similarity_keys", [])))))
-            score += overlap * 3
-        row_core = set(_clean_point_tokens(_parse_list_like(row.get("nlp_core_points", [])), limit=8))
-        if selected_core_points and row_core:
-            score += len(selected_core_points.intersection(row_core)) * 2
-        row_topic = _normalize_topic(row.get("topic_label", row.get("aspect_key", "")))
-        if topic_norm and row_topic == topic_norm:
-            score += 2
-        row_product = canonicalize_product_label(_safe_text(row.get("product", "")))
-        if product_value and row_product == product_value:
-            score += 1
-        row_cej = canonicalize_cej(_safe_text(row.get(COL_CEJ, row.get("cej_scene_code", ""))))
-        if cej_value and row_cej == cej_value:
-            score += 1
-        row_brand = canonicalize_brand(_safe_text(row.get(COL_BRAND, row.get("brand_mentioned", ""))))
-        if brand_value and brand_value != "미언급" and row_brand == brand_value:
-            score += 1
-        return score
-
-    if not narrowed.empty:
-        narrowed["_issue_overlap"] = narrowed.apply(_score_issue_overlap, axis=1)
-        narrowed = narrowed[narrowed["_issue_overlap"] > 0].copy()
-
-    if not narrowed.empty and selected_direction != 0:
-        direction_series = narrowed.apply(
-            lambda row: _infer_claim_direction(
-                " ".join(
-                    [
-                        _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", "")))),
-                        _safe_text(row.get("nlp_summary", "")),
-                        _safe_text(row.get("classification_reason", "")),
-                    ]
-                )
-            ),
-            axis=1,
+    if selected_sentiment == "neutral" and sentiment_name in {"positive", "negative", "mixed"}:
+        selected_sentiment = sentiment_name
+    sentiment_source = working.get("sentiment_final", pd.Series("", index=working.index))
+    sentiment_text = sentiment_source.fillna("").astype(str).str.strip()
+    if sentiment_text.eq("").all():
+        sentiment_source = working.get("sentiment_label", pd.Series("", index=working.index))
+    sentiment_norm = sentiment_source.fillna("").astype(str).map(_normalize_sentiment_direction)
+    if selected_sentiment == "mixed":
+        sentiment_mask = (
+            working.get("mixed_flag", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+            | sentiment_norm.eq("mixed")
         )
-        narrowed = narrowed[(direction_series == 0) | (direction_series == selected_direction)].copy()
+    else:
+        sentiment_mask = sentiment_norm.eq(selected_sentiment)
+        sentiment_mask = sentiment_mask & ~working.get("mixed_flag", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+    working = working[sentiment_mask].copy()
+    if working.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "sentiment_mismatch"}
 
-    if narrowed.empty or len(narrowed) < 3:
-        return pd.DataFrame()
-    working_pool = narrowed.copy()
+    selected_intents = _intent_tokens_from_row(working_selected)
+    if not selected_intents:
+        selected_intents = _intent_tokens_from_row(selected)
+    selected_topic = _normalize_topic_for_similarity(working_selected.get("topic_label", working_selected.get("aspect_key", selected.get("topic_label", selected.get("aspect_key", "")))))
+    selected_class = _safe_text(working_selected.get("classification_type", selected.get("classification_type", ""))).strip().lower()
 
-    def _coerce_scalar(value):
-        if isinstance(value, pd.Series):
-            return value.iloc[0] if not value.empty else ""
-        if isinstance(value, (list, tuple)):
-            return value[0] if value else ""
-        return value
+    def _intent_match(candidate: pd.Series) -> bool:
+        candidate_tokens = _intent_tokens_from_row(candidate)
+        overlap = len(selected_intents.intersection(candidate_tokens)) if selected_intents else 0
+        candidate_topic = _normalize_topic_for_similarity(candidate.get("topic_label", candidate.get("aspect_key", "")))
+        candidate_class = _safe_text(candidate.get("classification_type", "")).strip().lower()
+        if selected_intents and overlap >= 1:
+            return True
+        if selected_topic and selected_class and candidate_topic == selected_topic and candidate_class == selected_class:
+            return True
+        if selected_topic and candidate_topic == selected_topic and overlap >= 1:
+            return True
+        return False
 
-    records = []
-    for _, row in working_pool.iterrows():
-        text = _safe_text(_coerce_scalar(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", "")))))
-        if not text.strip():
+    working = working[working.apply(_intent_match, axis=1)].copy()
+    if working.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "intent_mismatch"}
+
+    display_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for _, row in working.iterrows():
+        row_text = _safe_text(row.get(COL_ORIGINAL, row.get("text_display", row.get("original_text", ""))))
+        if not row_text:
             continue
-        cid = ""
-        for key in ["comment_id", "source_content_id", "opinion_id"]:
-            if key in working_pool.columns:
-                candidate = _safe_text(_coerce_scalar(row.get(key, "")))
-                if candidate:
-                    cid = candidate
-                    break
-        records.append({
-            "comment_id": cid,
-            "원문": text,
-            "좋아요 수": int(pd.to_numeric(_coerce_scalar(row.get(COL_LIKES, row.get("like_count", 0))), errors="coerce") or 0),
-            "작성일시": _safe_text(_coerce_scalar(row.get(COL_WRITTEN_AT, row.get("published_at", "")))),
-        })
+        comment_id = _coerce_comment_id_from_row(row)
+        unique_key = (comment_id, row_text)
+        if unique_key in seen:
+            continue
+        seen.add(unique_key)
+        display_rows.append(
+            {
+                "comment_id": comment_id,
+                "원문": row_text,
+                "좋아요 수": int(pd.to_numeric(row.get(COL_LIKES, row.get("likes_count", row.get("like_count", 0))), errors="coerce") or 0),
+                "작성일시": _safe_text(row.get(COL_WRITTEN_AT, row.get("published_at", ""))),
+            }
+        )
 
-    result = pd.DataFrame(records)
-    if not result.empty:
-        result = result.drop_duplicates(subset=["comment_id", "원문"]).copy()
-        if "_issue_overlap" in working_pool.columns and len(working_pool) == len(result):
-            result["_issue_overlap"] = working_pool["_issue_overlap"].to_numpy()
-            result = result.sort_values(["_issue_overlap", "좋아요 수"], ascending=[False, False], na_position="last").drop(columns=["_issue_overlap"])
-    return result
+    result = pd.DataFrame(display_rows)
+    if result.empty:
+        return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "no_display_rows"}
+
+    result = result.sort_values(["좋아요 수", "작성일시"], ascending=[False, False], na_position="last").reset_index(drop=True)
+    cluster_size = len(result)
+    if cluster_size < 3:
+        return pd.DataFrame(), {
+            "cluster_size": 0,
+            "candidate_count": cluster_size,
+            "insufficient_evidence": True,
+            "reason": "cluster_lt_3",
+        }
+    return result, {"cluster_size": cluster_size, "candidate_count": cluster_size, "insufficient_evidence": False, "reason": "ok"}
 
 
 def _localized_video_title(title: str) -> str:
@@ -3427,37 +3400,13 @@ def _localized_video_title(title: str) -> str:
 
 
 def _resolve_sentiment_for_card(working_selected: pd.Series, fallback_sentiment: str) -> str:
-    sentiment = _safe_text(
-        working_selected.get(
-            "nlp_label",
-            working_selected.get("display_sentiment", working_selected.get("sentiment_label", fallback_sentiment)),
-        )
-    ).lower()
-    if sentiment not in {"positive", "negative", "neutral", "trash"}:
-        return fallback_sentiment if fallback_sentiment in {"positive", "negative", "neutral", "trash"} else "neutral"
-
-    # Lightweight consistency guard: if label and text polarity clearly conflict,
-    # avoid showing an obviously wrong label in the card header.
-    text_blob = " ".join(
-        [
-            _safe_text(working_selected.get(COL_ORIGINAL, "")),
-            _safe_text(working_selected.get(COL_TRANSLATION, "")),
-            _safe_text(working_selected.get("text_display", "")),
-            _safe_text(working_selected.get("cleaned_text", "")),
-        ]
-    ).lower()
-    negative_markers = ["고장", "불량", "문제", "불편", "별로", "최악", "안됨", "안돼", "수리", "as", "환불", "불만"]
-    positive_markers = ["만족", "좋아요", "좋음", "추천", "최고", "잘됨", "편함", "가성비", "great", "good", "best", "love"]
-    neg_hits = sum(1 for marker in negative_markers if marker in text_blob)
-    pos_hits = sum(1 for marker in positive_markers if marker in text_blob)
-
-    if sentiment == "positive" and neg_hits >= 2 and pos_hits == 0:
-        return "negative"
-    if sentiment == "negative" and pos_hits >= 2 and neg_hits == 0:
-        return "positive"
-    if abs(neg_hits - pos_hits) <= 1 and (neg_hits >= 1 or pos_hits >= 1):
-        return "neutral"
-    return sentiment
+    allowed = {"positive", "negative", "neutral", "mixed", "trash"}
+    for key in ("sentiment_final", "display_sentiment", "sentiment_label", "nlp_label"):
+        sentiment = _safe_text(working_selected.get(key, "")).lower()
+        if sentiment in allowed:
+            return sentiment
+    fallback = _safe_text(fallback_sentiment).lower()
+    return fallback if fallback in allowed else "neutral"
 
 
 def _confidence_ratio_for_card(working_selected: pd.Series, sentiment_label: str) -> float:
@@ -4044,6 +3993,242 @@ def _build_insight_layer(
     similar_comments: pd.DataFrame | None = None,
     insight_registry: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
+    def _infer_usage_context(text: str) -> str:
+        lowered_text = _safe_text(text).lower()
+        context_rules = [
+            (["야간", "밤", "저녁"], "야간 사용 상황"),
+            (["6개월", "몇개월", "장기간", "오래"], "장기간 사용 이후 상황"),
+            (["필터", "교체"], "필터 교체 이후 사용 상황"),
+            (["냄새", "악취", "odor", "smell"], "냄새 체감 상황"),
+            (["다용도실", "부엌", "주방"], "설치 위치 제약 상황"),
+            (["a/s", "as", "수리", "서비스", "기사", "센터"], "A/S 대응 상황"),
+            (["손으로", "직접", "떼어", "붙어"], "수동 처리 개입 상황"),
+            (["소음", "진동", "탈수"], "소음·진동 체감 상황"),
+            (["폐기", "버리", "junk"], "제품 폐기 판단 상황"),
+            (["해지", "위약금", "약정", "할부", "구독"], "구매/계약 부담 상황"),
+        ]
+        for markers, label in context_rules:
+            if any(marker in lowered_text for marker in markers):
+                return label
+        return "실사용 상황"
+
+    def _extract_similar_comment_evidence(frame: pd.DataFrame | None, limit: int = 2) -> list[str]:
+        if frame is None or frame.empty or "원문" not in frame.columns:
+            return []
+        evidences: list[str] = []
+        for text_value in frame["원문"].head(20).tolist():
+            raw = _safe_text(text_value)
+            if not raw:
+                continue
+            clauses = _pick_salient_clauses(raw, limit=1)
+            if not clauses:
+                continue
+            snippet = _summarize_original_for_preview(clauses[0], limit=72)
+            if snippet and snippet not in evidences:
+                evidences.append(snippet)
+            if len(evidences) >= limit:
+                break
+        return evidences
+
+    def _detect_domain_signal(corpus_text: str, tags: list[str], usage_value: str, sentiment_value: str) -> str:
+        corpus = _safe_text(corpus_text).lower()
+        signal_rules = [
+            (["냄새", "악취", "odor", "smell"], "odor_control"),
+            (["손으로", "직접", "붙어", "떼어", "manual", "cleaning", "scrub"], "manual_intervention"),
+            (["a/s", "as", "수리", "서비스", "기사", "센터", "부품"], "service_reliability"),
+            (["가격", "비용", "할부", "약정", "위약금", "price", "cost", "money", "expensive", "scam"], "price_value_gap"),
+            (["소음", "진동", "탈수", "시끄"], "noise_load"),
+            (["추천", "재구매", "지인", "소개", "recommend"], "recommendability"),
+            (["내구", "고장", "수명", "durab", "fail"], "durability"),
+        ]
+        for markers, signal_name in signal_rules:
+            if any(marker in corpus for marker in markers):
+                return signal_name
+        if "A/S·수리" in tags:
+            return "service_reliability"
+        if "구매/계약 부담" in usage_value:
+            return "price_value_gap"
+        return "general_experience"
+
+    def _compose_insight_text(
+        expectation_sentence: str,
+        actual_sentence: str,
+        perception_sentence: str,
+        context_sentence: str,
+        sentiment_value: str,
+        archetype: str,
+        domain_signal: str,
+    ) -> str:
+        pattern_key = f"{sentiment_value}:{archetype}:{domain_signal}"
+        if "negative:purchase_vs_use_conflict" in pattern_key or domain_signal == "price_value_gap":
+            # 비교/대조 구조
+            return f"{actual_sentence} {expectation_sentence} {perception_sentence} {context_sentence}".strip()
+        if domain_signal in {"odor_control", "manual_intervention"}:
+            # 경험 강조 구조
+            return f"{actual_sentence} {perception_sentence} {expectation_sentence} {context_sentence}".strip()
+        if sentiment_value == "positive" and domain_signal in {"recommendability", "durability"}:
+            # 인식 변화 강조 구조
+            return f"{perception_sentence} {expectation_sentence} {actual_sentence} {context_sentence}".strip()
+        if archetype in {"responsibility_shift", "cluster_signal_gap"}:
+            # 인식→원인 구조
+            return f"{perception_sentence} {actual_sentence} {expectation_sentence} {context_sentence}".strip()
+        # 기대 중심 기본 구조
+        return f"{expectation_sentence} {actual_sentence} {perception_sentence} {context_sentence}".strip()
+
+    def _derive_expectation(
+        sentiment_value: str,
+        product_value: str,
+        focus_value: str,
+        usage_value: str,
+        archetype: str,
+        tags: list[str],
+        lowered_text: str,
+        representative_text: str,
+        similar_texts: list[str],
+    ) -> tuple[str, str]:
+        corpus = " ".join(
+            [
+                _safe_text(representative_text),
+                " ".join(_safe_text(item) for item in similar_texts),
+            ]
+        ).lower()
+        has_smell_signal = any(token in corpus for token in ["냄새", "악취", "odor", "smell"])
+        has_manual_work_signal = any(token in corpus for token in ["손으로", "직접", "붙어", "떼어", "닦", "세척", "manual", "cleaning", "scrub"])
+        has_noise_signal = any(token in corpus for token in ["소음", "진동", "탈수", "시끄"])
+        has_cost_signal = any(token in corpus for token in ["가격", "비용", "할부", "구독", "약정", "위약금", "price", "cost", "money", "expensive", "scam", "waste of money"])
+        has_service_signal = any(token in corpus for token in ["a/s", "as", "수리", "서비스", "기사", "센터"])
+        has_recommend_signal = any(token in corpus for token in ["추천", "재구매", "지인", "소개"])
+
+        if sentiment_value == "negative":
+            if archetype == "purchase_vs_use_conflict":
+                return (
+                    f"사용자는 {product_value}를 선택할 때 안내받은 비용·계약 조건이 사용 단계에서도 그대로 유지되길 기대합니다.",
+                    "비용·계약 조건 일관성",
+                )
+            if has_smell_signal:
+                return (
+                    f"사용자는 {product_value}를 실내에서 써도 냄새 확산 없이 생활 동선이 유지되길 기대합니다.",
+                    "실내 사용 위생 안정",
+                )
+            if has_manual_work_signal:
+                return (
+                    f"사용자는 {product_value}가 처리 과정을 자동으로 끝내고 추가 손작업을 줄여주길 기대합니다.",
+                    "자동 처리 완결성",
+                )
+            if has_noise_signal:
+                return (
+                    f"사용자는 {product_value}를 일상 시간대에 사용해도 소음·진동 부담이 크지 않길 기대합니다.",
+                    "생활 소음 허용 범위",
+                )
+            if has_cost_signal:
+                return (
+                    f"사용자는 {product_value} 비용이 체감 성능과 균형을 이루길 기대합니다.",
+                    "비용 대비 성능 납득감",
+                )
+            if has_service_signal or "A/S·수리" in tags:
+                return (
+                    f"사용자는 문제가 생기면 {product_value}에서 원인과 해결 일정이 한 번에 정리되길 기대합니다.",
+                    "명확한 1회 해결",
+                )
+            if usage_value in {"필터 교체 이후 사용 상황", "냄새 체감 상황", "설치 위치 제약 상황"}:
+                return (
+                    f"사용자는 {product_value}를 일상 공간에서 추가 조치 없이 사용해도 '{focus_value}' 불편이 통제되길 기대합니다.",
+                    f"{focus_value} 자동 통제",
+                )
+            return (
+                f"사용자는 {product_value} 사용에서 '{focus_value}'가 별도 우회 없이 안정적으로 유지되길 기대합니다.",
+                f"{focus_value} 안정 유지",
+            )
+
+        if sentiment_value == "positive":
+            if archetype == "purchase_expectation_alignment":
+                return (
+                    f"사용자는 {product_value} 구매 전에 비교했던 장점이 실제 생활에서도 같은 수준으로 체감되길 기대합니다.",
+                    "구매 전 기대 체감 유지",
+                )
+            if has_recommend_signal:
+                return (
+                    f"사용자는 {product_value} 장점이 일시적 만족이 아니라 타인에게 추천 가능한 수준으로 재현되길 기대합니다.",
+                    "추천 가능한 만족 재현",
+                )
+            if has_smell_signal:
+                return (
+                    f"사용자는 {product_value} 사용 시 냄새 관리가 예상한 수준으로 안정적으로 유지되길 기대합니다.",
+                    "냄새 관리 안정성",
+                )
+            if has_manual_work_signal:
+                return (
+                    f"사용자는 {product_value} 사용 과정에서 불필요한 손작업 없이 편의성이 유지되길 기대합니다.",
+                    "편의성 유지",
+                )
+            if has_noise_signal:
+                return (
+                    f"사용자는 {product_value} 성능이 유지되면서도 생활 소음 부담이 낮길 기대합니다.",
+                    "성능·소음 균형",
+                )
+            return (
+                f"사용자는 {product_value}에서 '{focus_value}'가 영상/설명에서 본 수준으로 재현되길 기대합니다.",
+                f"{focus_value} 체감 재현",
+            )
+
+        return (
+            f"사용자는 {product_value} 사용에서 '{focus_value}' 체감 편차가 크지 않길 기대합니다.",
+            f"{focus_value} 체감 일관성",
+        )
+
+    def _derive_perception(
+        sentiment_value: str,
+        archetype: str,
+        lowered_text: str,
+        usage_value: str,
+        expectation_short: str,
+        representative_text: str,
+    ) -> str:
+        rep_lower = _safe_text(representative_text).lower()
+        lowered_corpus = f"{lowered_text} {rep_lower}"
+        if sentiment_value == "negative":
+            if any(token in lowered_corpus for token in ["폐기", "버리", "junk"]):
+                return "사용자는 이 경험을 단순 불편이 아니라 제품을 계속 쓰기 어려운 리스크로 인식합니다."
+            if any(token in lowered_corpus for token in ["해지", "위약금", "권유", "약정"]):
+                return "사용자는 제품 성능 이전에 판매·계약 안내 자체의 신뢰가 낮아졌다고 인식합니다."
+            if any(token in lowered_corpus for token in ["돈낭비", "비추", "실망", "worst"]):
+                return "사용자는 지불한 비용만큼의 성능 설득력이 부족하다고 인식합니다."
+            if any(token in lowered_corpus for token in ["냄새", "악취", "odor", "smell"]):
+                return "사용자는 위생 관리 부담이 제품 밖으로 전가됐다고 인식합니다."
+            if any(token in lowered_corpus for token in ["손으로", "직접", "떼어", "붙어"]):
+                return "사용자는 자동화 제품인데도 수동 노동이 남는다고 인식합니다."
+            if archetype == "responsibility_shift":
+                return "사용자는 문제 원인보다 책임이 자신에게 돌아온다고 인식해 대응 신뢰를 낮춥니다."
+            return f"사용자는 {usage_value}에서 '{expectation_short}' 기대가 충족되지 않아 제품과 지원 체계 신뢰를 낮춥니다."
+
+        if sentiment_value == "positive":
+            if any(token in lowered_corpus for token in ["추천", "재구매", "recommend"]):
+                return "사용자는 이 경험을 타인에게 추천 가능한 확신으로 인식합니다."
+            if any(token in lowered_corpus for token in ["조용", "편하", "만족", "최고", "great", "excellent"]):
+                return "사용자는 핵심 성능이 일상 기준을 충족해 선택이 타당했다고 인식합니다."
+            if any(token in lowered_corpus for token in ["냄새", "악취", "odor", "smell"]):
+                return "사용자는 위생/냄새 관리에서 체감한 안정성이 재구매 신뢰로 이어진다고 인식합니다."
+            if any(token in lowered_corpus for token in ["손으로", "직접", "편하", "간편"]):
+                return "사용자는 사용 절차가 기대보다 단순해 일상 루틴에 무리 없이 정착된다고 인식합니다."
+            return f"사용자는 '{expectation_short}' 기대가 실제로 확인돼 선택 신뢰가 강화됐다고 인식합니다."
+
+        return "사용자는 현재 신호를 추가 확인이 필요한 혼합 반응으로 인식합니다."
+
+    def _extract_perception_evidence(text: str) -> str:
+        cues = [
+            "비추", "돈낭비", "실망", "폐기", "버리", "해지", "위약금", "권유",
+            "추천", "만족", "최고", "좋", "great", "recommend",
+        ]
+        clauses = _pick_salient_clauses(text, limit=4)
+        lowered_clauses = [(clause, clause.lower()) for clause in clauses if _safe_text(clause)]
+        for cue in cues:
+            for clause, lower_clause in lowered_clauses:
+                if cue in lower_clause:
+                    return _summarize_original_for_preview(clause, limit=72)
+        if clauses:
+            return _summarize_original_for_preview(clauses[0], limit=72)
+        return ""
+
     core_points, context_tags, _, _, _, _ = _extract_row_nlp_metadata(working_selected)
     focus_tokens = core_points or _clean_point_tokens(keywords, limit=4)
     focus_point = _safe_text(focus_tokens[0]) if focus_tokens else _localize_aspect_label(aspect_label)
@@ -4062,8 +4247,10 @@ def _build_insight_layer(
     theme_hint = ", ".join(theme_tokens[:2]) if theme_tokens else _localize_aspect_label(aspect_label)
     similar_count = len(similar_comments) if similar_comments is not None else int(pd.to_numeric(working_selected.get("cluster_size", 1), errors="coerce") or 1)
     video_signals = _collect_video_context_signals(working_selected, source_comments)
-    neg_share = float(video_signals.get("negative_share", 0.0) or 0.0)
-    pos_share = float(video_signals.get("positive_share", 0.0) or 0.0)
+    usage_context = _infer_usage_context(source_text)
+    similar_evidences = _extract_similar_comment_evidence(similar_comments, limit=2)
+    video_evidence_raw = next((item for item in (video_signals.get("evidence_clauses", []) or []) if _safe_text(item)), "")
+    video_evidence = _summarize_original_for_preview(video_evidence_raw, limit=72) if video_evidence_raw else ""
 
     has_purchase_conflict = any(
         marker in lowered for marker in ["구독", "가입", "해지", "약정", "위약금", "권유", "가격", "비용", "할부", "결제"]
@@ -4071,7 +4258,7 @@ def _build_insight_layer(
     has_responsibility_shift = any(
         marker in lowered for marker in ["사용자", "사용법", "잘못", "탓", "관리 못", "네가", "본인 책임"]
     )
-    has_structural_repeat = similar_count >= 8
+    has_cluster_signal = similar_count >= 8
 
     candidate_archetypes: list[str] = []
     if sentiment_name == "negative":
@@ -4079,15 +4266,15 @@ def _build_insight_layer(
             candidate_archetypes.append("purchase_vs_use_conflict")
         if has_responsibility_shift:
             candidate_archetypes.append("responsibility_shift")
-        if has_structural_repeat:
-            candidate_archetypes.append("root_cause_repeat")
+        if has_cluster_signal:
+            candidate_archetypes.append("cluster_signal_gap")
         candidate_archetypes.append("expectation_gap")
     elif sentiment_name == "positive":
         if has_purchase_conflict:
             candidate_archetypes.append("purchase_expectation_alignment")
         candidate_archetypes.append("expectation_gap_resolved")
     else:
-        candidate_archetypes.append("root_cause_repeat")
+        candidate_archetypes.append("mixed_signal")
 
     product_key = product or "unknown"
     used_archetypes = insight_registry.setdefault(product_key, set()) if insight_registry is not None else set()
@@ -4095,66 +4282,101 @@ def _build_insight_layer(
     if insight_registry is not None:
         used_archetypes.add(selected_archetype)
 
-    if selected_archetype == "purchase_vs_use_conflict":
-        insight = (
-            f"사용자는 {product} 구매 시 비용·계약 부담이 단순하고 예측 가능하길 기대하지만, 실제 사용 과정에서는 '{focus_point}' 이슈와 함께 결제/해지 체감이 충돌하며 "
-            f"구매 기대와 사용 경험 간 충돌이 확대되고 있습니다. "
-            f"영상이 {theme_hint} 중심으로 장점을 제시한 맥락과 달리 댓글 반응은 실제 운영 조건에서의 불편을 함께 드러냅니다."
+    expectation_sentence, expectation_short = _derive_expectation(
+        sentiment_value=sentiment_name,
+        product_value=product,
+        focus_value=focus_point,
+        usage_value=usage_context,
+        archetype=selected_archetype,
+        tags=context_tags,
+        lowered_text=lowered,
+        representative_text=source_text,
+        similar_texts=similar_evidences,
+    )
+    domain_signal = _detect_domain_signal(
+        corpus_text=" ".join([source_text] + similar_evidences),
+        tags=context_tags,
+        usage_value=usage_context,
+        sentiment_value=sentiment_name,
+    )
+    if sentiment_name == "negative":
+        actual_sentence = (
+            f"실제 사용 장면에서는 대표 코멘트의 '{representative_evidence or focus_point}'처럼 {usage_context}에서 예상과 다른 마찰이 직접 확인됩니다."
         )
-    elif selected_archetype == "responsibility_shift":
-        insight = (
-            f"표면적으로는 '{focus_point}' 문제처럼 보이지만, 실제로는 제품 문제를 사용자 책임으로 돌리는 해석이 함께 나타나며 책임 전가 인식이 불만을 키우고 있습니다. "
-            f"사용자는 명확한 원인 설명과 재현 가능한 대응 기준을 기대하지만, 현재 경험은 그 기대를 충족하지 못하고 있습니다."
-        )
-    elif selected_archetype == "root_cause_repeat":
-        insight = (
-            f"이 반응은 단일 불만이 아니라 '{focus_point}' 유형이 반복되는 구조에서 발생한 신호로, 반복되는 불만의 근본 원인 구조를 먼저 분리해야 하는 상태입니다. "
-            f"사용자는 같은 문제를 반복 설명하지 않고 해결 경로가 연결되길 기대하지만, 실제 경험에서는 동일 문제 재진입이 이어지고 있습니다."
-        )
-    elif selected_archetype == "purchase_expectation_alignment":
-        insight = (
-            f"사용자는 {product} 선택 시 가격·조건 대비 체감 효용을 기대했고, 실제 사용에서도 '{focus_point}' 만족이 확인되어 구매 기대와 사용 경험 간 충돌이 크지 않습니다. "
-            f"이 신호는 단순 호감이 아니라 구매 판단에 쓰인 강점이 실제 경험으로 검증되고 있음을 보여줍니다."
-        )
-    elif selected_archetype == "expectation_gap_resolved":
-        insight = (
-            f"사용자는 {product}에서 '{focus_point}'가 실제로 구현되길 기대했고, 현재 반응은 기대와 현실의 괴리가 작아 신뢰가 유지되는 흐름을 보여줍니다. "
-            f"영상 맥락({theme_hint})과 실제 사용 반응이 같은 방향으로 맞물린다는 점이 핵심입니다."
+    elif sentiment_name == "positive":
+        actual_sentence = (
+            f"실제 사용 장면에서는 대표 코멘트의 '{representative_evidence or focus_point}'처럼 {usage_context}에서 기대했던 장점이 그대로 확인됩니다."
         )
     else:
-        insight = (
-            f"사용자는 {product} 사용에서 '{focus_point}'가 자동·안정적으로 해결되길 기대하지만, 실제 경험에서는 해당 지점의 마찰이 반복되어 기대와 현실의 괴리가 커지고 있습니다. "
-            f"영상 맥락({theme_hint})과 댓글에서 드러난 실사용 경험 사이의 간격이 불만의 핵심 배경입니다."
+        actual_sentence = (
+            f"실제 사용 장면에서는 대표 코멘트의 '{representative_evidence or focus_point}'처럼 {usage_context}에서 상반된 신호가 함께 관찰됩니다."
         )
+    perception_sentence = _derive_perception(
+        sentiment_value=sentiment_name,
+        archetype=selected_archetype,
+        lowered_text=lowered,
+        usage_value=usage_context,
+        expectation_short=expectation_short,
+        representative_text=source_text,
+    )
+    if theme_tokens:
+        if sentiment_name == "positive":
+            context_sentence = f"영상에서 강조된 {theme_hint} 맥락이 댓글 경험과 같은 방향으로 이어져 긍정 해석 근거를 강화합니다."
+        elif sentiment_name == "negative":
+            context_sentence = f"영상에서 강조된 {theme_hint} 맥락과 댓글 경험이 어긋나며 부정 해석 근거를 강화합니다."
+        else:
+            context_sentence = f"영상에서 강조된 {theme_hint} 맥락과 댓글 경험이 일부 일치·일부 불일치합니다."
+    else:
+        context_sentence = ""
+
+    insight = _compose_insight_text(
+        expectation_sentence=expectation_sentence,
+        actual_sentence=actual_sentence,
+        perception_sentence=perception_sentence,
+        context_sentence=context_sentence,
+        sentiment_value=sentiment_name,
+        archetype=selected_archetype,
+        domain_signal=domain_signal,
+    )
 
     supporting_signals: list[str] = []
     if representative_evidence:
-        supporting_signals.append(f"대표 코멘트에서 '{representative_evidence}'처럼 문제 체감이 구체적으로 언급됩니다.")
-    if similar_count >= 3:
         supporting_signals.append(
-            f"현재 필터 기준 동일 주장 방향·문제 인식의 유사 댓글이 {similar_count:,}건 확인되어 일회성 반응으로 보기 어렵습니다."
+            f"대표 코멘트의 '{representative_evidence}' 표현이 사용자 기대('{expectation_short}')와 실제 경험의 차이를 직접 보여줍니다."
         )
-    top_points = video_signals.get("top_points", []) or []
-    if top_points:
+    if similar_evidences:
         supporting_signals.append(
-            f"같은 영상 반응에서도 '{', '.join(top_points[:2])}' 포인트가 반복돼 같은 문제 구조가 재확인됩니다."
+            f"유사 댓글의 '{similar_evidences[0]}' 사례가 같은 사용 장면에서 동일한 판단 방향을 확인시켜 줍니다."
         )
-    if sentiment_name == "negative":
+    if len(similar_evidences) >= 2:
         supporting_signals.append(
-            f"동일 영상 맥락에서 부정 반응 비중이 {neg_share * 100:.1f}%로, 긍정({pos_share * 100:.1f}%) 대비 높은 편입니다."
+            f"추가 유사 댓글 '{similar_evidences[1]}'에서도 같은 문제 인식(또는 같은 강점 인식)이 반복됩니다."
         )
-    elif sentiment_name == "positive":
+    perception_evidence = _extract_perception_evidence(source_text)
+    if perception_evidence and perception_evidence not in " ".join(supporting_signals):
         supporting_signals.append(
-            f"동일 영상 맥락에서 긍정 반응 비중이 {pos_share * 100:.1f}%이며, 핵심 강점이 반복 확인됩니다."
+            f"원문의 '{perception_evidence}' 문장이 사용자의 최종 인식 변화(불신/만족/추천)를 뒷받침합니다."
         )
-    else:
+    if video_evidence:
         supporting_signals.append(
-            f"동일 영상 맥락에서 부정 {neg_share * 100:.1f}% / 긍정 {pos_share * 100:.1f}%로 혼합 반응이 관찰됩니다."
+            f"같은 영상 맥락의 '{video_evidence}' 사례가 대표 코멘트와 유사한 기대-경험 간격(또는 일치)을 보여줍니다."
         )
 
-    supporting_signals = [item for item in supporting_signals if _safe_text(item)]
+    deduped_signals: list[str] = []
+    seen_signals: set[str] = set()
+    for signal_item in supporting_signals:
+        cleaned_signal = _safe_text(signal_item)
+        if not cleaned_signal:
+            continue
+        if cleaned_signal in seen_signals:
+            continue
+        deduped_signals.append(cleaned_signal)
+        seen_signals.add(cleaned_signal)
+    supporting_signals = deduped_signals
     if len(supporting_signals) < 2:
-        supporting_signals.append(f"핵심 포인트 '{focus_point}'는 대표 코멘트와 영상 맥락 모두에서 확인됩니다.")
+        supporting_signals.append(
+            f"대표 코멘트는 '{focus_point}'에 대한 사용자 기대와 실제 체감을 동시에 담고 있어 Insight 해석의 직접 근거로 사용됩니다."
+        )
 
     return {
         "insight": insight,
@@ -4162,15 +4384,14 @@ def _build_insight_layer(
     }
 
 
-def _build_resolution_point(
+def _build_resolution_point_legacy_template(
     working_selected: pd.Series | str,
     sentiment_name: str | list[str],
     keywords: list[str] | None = None,
     inquiry_flag: bool = False,
     negative_context: dict[str, str] | None = None,
 ) -> str:
-    # Backward compatibility:
-    # old signature: _build_resolution_point(sentiment_name, keywords, inquiry_flag=False)
+    """Legacy template-based generator kept for before/after validation comparisons."""
     if isinstance(working_selected, pd.Series):
         row = working_selected
         sentiment_value = _safe_text(sentiment_name).lower()
@@ -4216,6 +4437,10 @@ def _build_resolution_point(
             if any(token in hint_blob for token in tokens):
                 primary_tag = inferred_tag
                 break
+        if not primary_tag:
+            keyword_blob = " ".join([_safe_text(token).lower() for token in keyword_values])
+            if any(token in keyword_blob for token in ["구독", "가입", "약정", "해지", "위약금"]):
+                primary_tag = "구독/계약"
     inquiry_suffix = " 문의 성격이 강하므로 응답 문구를 고객 언어로 먼저 정리하세요." if inquiry_flag else ""
     detail_blob = " ".join([source_text.lower(), _safe_text(focus_hint).lower(), _safe_text(evidence_clause).lower()])
 
@@ -4234,7 +4459,7 @@ def _build_resolution_point(
         else:
             as_action = f"{product_hint}에서 반복된 '{focus_hint}' 불편은 수리 체감 공백이 핵심이므로 고장유형별 1차 진단 기준과 방문 전 부품확정 절차를 표준화하세요."
         negative_actions = {
-            "구독/계약": f"'{evidence_clause}'에서 드러난 가입·해지 혼선을 줄이기 위해 {product_hint} 월납/약정/해지비용 안내를 한 흐름으로 재작성하고, 과도 권유 멘트는 즉시 교정하세요.",
+            "구독/계약": f"'{evidence_clause}'에서 드러난 가입·해지 혼선을 줄이기 위해 {product_hint} 월납/약정/해지비용(위약금) 안내를 한 흐름으로 재작성하고, 과도 권유 멘트는 즉시 교정하세요.",
             "A/S·수리": as_action,
             "배송·설치": f"'{evidence_clause}' 사례를 기준으로 일정 지연과 현장 안내 누락을 분리해 점검하고, 설치 직후 7일 케어 안내를 보강하세요.",
             "가격·비용": f"'{evidence_clause}'처럼 비용 인식이 틀어지는 지점을 찾아 총비용(월납·할부·해지비용) 안내 문구와 결제 직전 고지를 함께 손보세요.",
@@ -4254,6 +4479,367 @@ def _build_resolution_point(
         return f"[강점 확장] '{evidence_clause}'에서 드러난 {focus} 강점을 재구매·추천 상황에 맞춰 메시지 우선순위로 반영하세요."
 
     return f"[관찰] '{evidence_clause}' 반응은 혼합 신호이므로 성급한 단정 대신 동일 맥락 재등장 여부를 확인한 뒤 대응 단계를 결정하세요."
+
+
+def _extract_similar_comment_clauses(frame: pd.DataFrame | None, limit: int = 3) -> list[str]:
+    if frame is None or frame.empty or "원문" not in frame.columns:
+        return []
+    clauses: list[str] = []
+    for raw_text in frame["원문"].head(30).tolist():
+        text_value = _safe_text(raw_text)
+        if not text_value:
+            continue
+        picked = _pick_salient_clauses(text_value, limit=1)
+        if not picked:
+            continue
+        snippet = _summarize_original_for_preview(picked[0], limit=78)
+        if snippet and snippet not in clauses:
+            clauses.append(snippet)
+        if len(clauses) >= limit:
+            break
+    return clauses
+
+
+def _infer_resolution_problem_signal(
+    representative_text: str,
+    similar_clauses: list[str],
+    context_tags: list[str],
+    focus_points: list[str],
+) -> str:
+    corpus = " ".join(
+        [
+            _safe_text(representative_text),
+            " ".join(similar_clauses),
+            " ".join(context_tags),
+            " ".join(focus_points),
+        ]
+    ).lower()
+    signal_rules = [
+        (["냄새", "악취", "odor", "smell"], "odor_leakage"),
+        (["필터", "소모품", "교체"], "consumable_burden"),
+        (["손으로", "직접", "붙어", "떼어", "scrub", "manual"], "manual_intervention"),
+        (["고장", "불량", "멈춤", "누수", "파손", "fail", "broken"], "reliability_failure"),
+        (["a/s", "as", "수리", "기사", "센터", "지연", "출장"], "service_response_gap"),
+        (["배송", "설치", "방문", "일정", "공간"], "installation_delivery_gap"),
+        (["가격", "비용", "할부", "약정", "해지", "위약금", "구독", "price", "cost", "money", "expensive"], "pricing_contract_gap"),
+        (["안내", "설명", "매뉴얼", "설정", "사용법", "초기", "세팅"], "onboarding_guide_gap"),
+        (["광고", "과장", "홍보", "영상처럼", "기대와", "다름"], "message_expectation_gap"),
+        (["추천", "재구매", "지인", "소개", "만족", "좋"], "advocacy_signal"),
+    ]
+    for tokens, signal_name in signal_rules:
+        if any(token in corpus for token in tokens):
+            return signal_name
+    return "general_experience"
+
+
+def _infer_resolution_action_domain(
+    journey_stage: str,
+    sentiment_value: str,
+    mixed_flag: bool,
+    signal_name: str,
+) -> str:
+    domain_scores: Counter[str] = Counter(
+        {
+            "product": 0,
+            "UX / guide": 0,
+            "operations / service": 0,
+            "marketing / message": 0,
+            "business / policy": 0,
+        }
+    )
+
+    journey_to_domain = {
+        "인지": [("marketing / message", 2)],
+        "탐색": [("marketing / message", 2), ("business / policy", 1)],
+        "구매": [("business / policy", 2), ("marketing / message", 1)],
+        "결정": [("business / policy", 2), ("marketing / message", 1)],
+        "배송": [("operations / service", 3)],
+        "사용준비": [("UX / guide", 3), ("operations / service", 1)],
+        "사용": [("product", 2), ("UX / guide", 1)],
+        "관리": [("operations / service", 2), ("product", 1)],
+        "교체": [("business / policy", 2), ("product", 1)],
+    }
+    for domain, weight in journey_to_domain.get(journey_stage, [("operations / service", 1)]):
+        domain_scores[domain] += weight
+
+    signal_to_domain = {
+        "odor_leakage": ("product", 3),
+        "consumable_burden": ("UX / guide", 2),
+        "manual_intervention": ("product", 2),
+        "reliability_failure": ("product", 3),
+        "service_response_gap": ("operations / service", 3),
+        "installation_delivery_gap": ("operations / service", 3),
+        "pricing_contract_gap": ("business / policy", 3),
+        "onboarding_guide_gap": ("UX / guide", 3),
+        "message_expectation_gap": ("marketing / message", 3),
+        "advocacy_signal": ("marketing / message", 2),
+    }
+    if signal_name in signal_to_domain:
+        signal_domain, signal_weight = signal_to_domain[signal_name]
+        domain_scores[signal_domain] += signal_weight
+
+    if sentiment_value == "positive":
+        domain_scores["marketing / message"] += 1
+    if sentiment_value == "negative":
+        domain_scores["operations / service"] += 1
+    if mixed_flag:
+        domain_scores["UX / guide"] += 1
+
+    priority_order = ["product", "operations / service", "business / policy", "UX / guide", "marketing / message"]
+    return sorted(priority_order, key=lambda item: (-domain_scores[item], priority_order.index(item)))[0]
+
+
+def _resolve_journey_stage_for_resolution(
+    row: pd.Series,
+    context_tags: list[str],
+    signal_name: str,
+) -> tuple[str, bool]:
+    direct_stage = _journey_value_from_row(row)
+    if direct_stage and direct_stage != "기타":
+        return direct_stage, False
+
+    classification = _safe_text(row.get("classification_type", "")).strip().lower()
+    context_blob = " ".join([_safe_text(tag).lower() for tag in context_tags])
+    text_blob = " ".join(
+        [
+            _safe_text(row.get(COL_ORIGINAL, "")),
+            _safe_text(row.get(COL_TRANSLATION, "")),
+            _safe_text(row.get("cleaned_text", "")),
+        ]
+    ).lower()
+
+    if any(token in context_blob for token in ["배송", "설치"]) or any(token in text_blob for token in ["배송", "설치", "방문"]):
+        return "배송", True
+    if any(token in context_blob for token in ["a/s", "수리", "고객지원", "문의"]) or signal_name in {"service_response_gap"}:
+        return "관리", True
+    if any(token in context_blob for token in ["구독", "계약", "구매 전환"]) or signal_name in {"pricing_contract_gap"}:
+        return "구매", True
+    if any(token in context_blob for token in ["비교", "탐색"]) or classification in {"comparison", "informational"}:
+        return "탐색", True
+    if any(token in context_blob for token in ["추천"]) or classification == "preference":
+        return "결정", True
+    if signal_name in {"manual_intervention", "odor_leakage", "reliability_failure", "consumable_burden", "onboarding_guide_gap"}:
+        return "사용", True
+    return "", False
+
+
+def _build_resolution_evidence_bundle(
+    row: pd.Series,
+    sentiment_value: str,
+    keywords: list[str] | None,
+    inquiry_flag: bool,
+    similar_comments: pd.DataFrame | None,
+    source_comments: pd.DataFrame | None,
+) -> dict[str, Any]:
+    core_points, context_tags, _, _, _, _ = _extract_row_nlp_metadata(row)
+    focus_points = core_points or _clean_point_tokens(keywords or [], limit=5)
+    representative_text = _combine_unique_text_parts(
+        [
+            _safe_text(row.get(COL_ORIGINAL, "")),
+            _safe_text(row.get(COL_TRANSLATION, "")),
+            _safe_text(row.get("cleaned_text", "")),
+            _safe_text(row.get("text_display", "")),
+        ]
+    )
+    representative_clause = _pick_salient_clauses(representative_text, limit=1)
+    representative_evidence = _summarize_original_for_preview(representative_clause[0], limit=82) if representative_clause else ""
+    similar_clauses = _extract_similar_comment_clauses(similar_comments, limit=3)
+    journey_stage_direct = _journey_value_from_row(row)
+    mixed_flag = bool(_truthy(row.get("mixed_flag", False)) or sentiment_value == "mixed")
+    similar_count = len(similar_comments) if similar_comments is not None else 0
+    product_label = canonicalize_product_label(_safe_text(row.get("product", ""))) or "해당 제품"
+
+    video_signals = _collect_video_context_signals(row, source_comments)
+    context_evidence = ""
+    for clause in video_signals.get("evidence_clauses", []):
+        snippet = _summarize_original_for_preview(_safe_text(clause), limit=82)
+        if snippet and snippet != representative_evidence:
+            context_evidence = snippet
+            break
+
+    signal_name = _infer_resolution_problem_signal(
+        representative_text=representative_text,
+        similar_clauses=similar_clauses,
+        context_tags=context_tags,
+        focus_points=focus_points,
+    )
+    journey_stage, journey_inferred = _resolve_journey_stage_for_resolution(
+        row=row,
+        context_tags=context_tags,
+        signal_name=signal_name,
+    )
+    if not journey_stage and journey_stage_direct:
+        journey_stage = journey_stage_direct
+        journey_inferred = False
+    action_domain = _infer_resolution_action_domain(
+        journey_stage=journey_stage,
+        sentiment_value=sentiment_value,
+        mixed_flag=mixed_flag,
+        signal_name=signal_name,
+    )
+    insufficient_reasons: list[str] = []
+    if not journey_stage or journey_stage == "기타":
+        insufficient_reasons.append("journey_stage_missing")
+    elif journey_inferred:
+        # Phase 6.4 policy: inferred journey is limited fallback, not full-evidence mode.
+        insufficient_reasons.append("journey_stage_inferred_fallback")
+    if not representative_evidence:
+        insufficient_reasons.append("representative_evidence_missing")
+    if similar_count < 3:
+        insufficient_reasons.append("similar_signal_lt_3")
+    insufficient_evidence = bool(insufficient_reasons)
+
+    return {
+        "journey_stage": journey_stage,
+        "sentiment": sentiment_value,
+        "mixed_flag": mixed_flag,
+        "inquiry_flag": inquiry_flag,
+        "product_label": product_label,
+        "focus_points": focus_points,
+        "context_tags": context_tags,
+        "representative_evidence": representative_evidence,
+        "similar_evidence": similar_clauses,
+        "similar_count": similar_count,
+        "journey_inferred": journey_inferred,
+        "context_evidence": context_evidence,
+        "signal_name": signal_name,
+        "action_domain": action_domain,
+        "insufficient_evidence": insufficient_evidence,
+        "insufficient_reasons": insufficient_reasons,
+    }
+
+
+def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
+    product_label = _safe_text(bundle.get("product_label", "해당 제품")) or "해당 제품"
+    sentiment_value = _safe_text(bundle.get("sentiment", "neutral")).lower()
+    journey_stage = _safe_text(bundle.get("journey_stage", ""))
+    mixed_flag = bool(bundle.get("mixed_flag", False))
+    signal_name = _safe_text(bundle.get("signal_name", "general_experience"))
+    action_domain = _safe_text(bundle.get("action_domain", "operations / service"))
+    representative_evidence = _safe_text(bundle.get("representative_evidence", ""))
+    context_evidence = _safe_text(bundle.get("context_evidence", ""))
+    similar_evidence = bundle.get("similar_evidence", [])
+    if not isinstance(similar_evidence, list):
+        similar_evidence = []
+    similar_evidence = [_safe_text(item) for item in similar_evidence if _safe_text(item)]
+    similar_count = int(bundle.get("similar_count", 0) or 0)
+    focus_points = bundle.get("focus_points", [])
+    if not isinstance(focus_points, list):
+        focus_points = []
+    focus_text = ", ".join([_safe_text(token) for token in focus_points[:2] if _safe_text(token)]) or "핵심 사용 이슈"
+
+    if bundle.get("insufficient_evidence", False):
+        evidence_hint = representative_evidence or focus_text
+        return (
+            f"[근거 부족] '{evidence_hint}' 신호는 확인됐지만 고객 경험 여정 단계가 비어 있어 실행 우선순위를 확정할 수 없습니다. "
+            f"여정 단계 라벨을 먼저 보완한 뒤 {action_domain} 관점에서 재평가하세요."
+        )
+
+    stage_phrase = f"{journey_stage} 단계"
+    repeated_phrase = f"유사 댓글 {similar_count:,}건에서 같은 패턴이 반복" if similar_count >= 3 else "반복 신호는 제한적"
+    supporting_phrase = f"대표 근거는 '{representative_evidence}'" if representative_evidence else f"대표 신호는 '{focus_text}'"
+    similar_phrase = f"유사 근거는 '{similar_evidence[0]}'" if similar_evidence else ""
+    context_phrase = f"영상 맥락에서는 '{context_evidence}'가 함께 관찰" if context_evidence else ""
+    connector = " / ".join([piece for piece in [supporting_phrase, similar_phrase, context_phrase] if piece])
+
+    negative_actions = {
+        "odor_leakage": f"{stage_phrase}에서 냄새 차단 실패가 반복되므로 밀폐 구조·배기 경로·필터 수명 조건을 실사용 환경 기준으로 재설계하세요.",
+        "consumable_burden": f"{stage_phrase}에서 소모품/교체 부담이 마찰이므로 교체 조건 안내와 구매 동선을 하나의 유지관리 시나리오로 통합하세요.",
+        "manual_intervention": f"{stage_phrase}에서 자동 처리 기대가 수동 개입으로 깨지므로 잔여물 부착 방지 설계와 자동 세정 가이드를 동시에 보강하세요.",
+        "reliability_failure": f"{stage_phrase}에서 기능 고장 신호가 뚜렷하므로 고장 유형별 재현 테스트와 부품 신뢰성 개선 항목을 제품 백로그 우선순위로 상향하세요.",
+        "service_response_gap": f"{stage_phrase}에서 A/S 응답 공백이 확인되므로 접수→진단→해결 리드타임 기준을 분리 관리하고 지연 원인별 대응 SLA를 고정하세요.",
+        "installation_delivery_gap": f"{stage_phrase}에서 설치·배송 경험 손실이 반복되므로 일정 안내, 현장 체크리스트, 설치 후 검수 절차를 한 흐름으로 재정의하세요.",
+        "pricing_contract_gap": f"{stage_phrase}에서 가격/약정 인식 충돌이 발생하므로 총비용·해지비용·약정 조건을 결제 직전 동일 화면에서 선명하게 고지하세요.",
+        "onboarding_guide_gap": f"{stage_phrase}에서 초기 사용 가이드 부족이 드러나므로 첫 사용 7일 가이드를 실제 실패 장면 중심으로 재작성하고 단계별 안내를 단축하세요.",
+        "message_expectation_gap": f"{stage_phrase}에서 메시지 기대와 실제 체감 간극이 커서 광고/상세 설명의 약속 범위를 실사용 조건 중심으로 재정렬해야 합니다.",
+    }
+    positive_actions = {
+        "advocacy_signal": f"{stage_phrase}에서 추천/재구매 신호가 확인되므로 해당 강점을 후기 맥락과 함께 노출해 전환 근거를 강화하세요.",
+        "reliability_failure": f"{stage_phrase}에서 내구 강점이 긍정 신호로 작동하므로 장기간 사용 근거를 메시지·FAQ·비교표에 일관되게 연결하세요.",
+        "consumable_burden": f"{stage_phrase}에서 유지관리 편의가 강점으로 작동하므로 교체/세척이 쉬운 이유를 사용 시나리오 중심으로 강조하세요.",
+    }
+    mixed_actions = {
+        "pricing_contract_gap": f"{stage_phrase}에서 가치 만족과 비용 불신이 동시에 나타나므로 가격 체계 투명화와 강점 메시지 노출을 분리해 재설계하세요.",
+        "service_response_gap": f"{stage_phrase}에서 성능 만족과 대응 불만이 함께 존재하므로 제품 강점 유지와 서비스 리드타임 개선을 병렬 과제로 운영하세요.",
+        "manual_intervention": f"{stage_phrase}에서 결과 만족과 수동 불편이 공존하므로 자동화 실패 구간을 줄이는 제품 보완과 사용 가이드를 함께 개편하세요.",
+    }
+
+    if mixed_flag:
+        action_core = mixed_actions.get(
+            signal_name,
+            f"{stage_phrase}에서 기대 충족과 불편 신호가 동시에 관찰되어 강점 유지와 마찰 제거를 분리한 이중 실행 계획이 필요합니다.",
+        )
+    elif sentiment_value == "positive":
+        action_core = positive_actions.get(
+            signal_name,
+            f"{stage_phrase}에서 확인된 '{focus_text}' 강점을 고객 의사결정 접점에 재사용해 추천·재구매 전환으로 연결하세요.",
+        )
+    elif sentiment_value == "negative":
+        action_core = negative_actions.get(
+            signal_name,
+            f"{stage_phrase}에서 드러난 '{focus_text}' 마찰을 {action_domain} 영역의 우선 개선 항목으로 등록해 다음 배치에서 재검증하세요.",
+        )
+    else:
+        action_core = f"{stage_phrase}에서 신호가 혼재해 즉시 단정은 어렵습니다. '{focus_text}' 관련 증거를 추가 확보한 뒤 {action_domain} 실행안을 확정하세요."
+
+    if connector:
+        return f"{action_core} ({repeated_phrase}; {connector})"
+    return f"{action_core} ({repeated_phrase})"
+
+
+def _build_resolution_point(
+    working_selected: pd.Series | str,
+    sentiment_name: str | list[str],
+    keywords: list[str] | None = None,
+    inquiry_flag: bool = False,
+    negative_context: dict[str, str] | None = None,
+    similar_comments: pd.DataFrame | None = None,
+    source_comments: pd.DataFrame | None = None,
+) -> dict[str, Any] | str:
+    """Evidence-bundle based resolution generator with mandatory journey-stage handling."""
+    if not isinstance(working_selected, pd.Series):
+        # Keep old non-Series signature for legacy tests/callers.
+        return _build_resolution_point_legacy_template(
+            working_selected=working_selected,
+            sentiment_name=sentiment_name,
+            keywords=keywords,
+            inquiry_flag=inquiry_flag,
+            negative_context=negative_context,
+        )
+
+    sentiment_value = _safe_text(sentiment_name).lower()
+    if sentiment_value not in {"positive", "negative", "neutral", "mixed"}:
+        sentiment_value = _normalize_sentiment_direction(
+            working_selected.get("sentiment_final", working_selected.get("sentiment_label", "neutral"))
+        )
+    bundle = _build_resolution_evidence_bundle(
+        row=working_selected,
+        sentiment_value=sentiment_value,
+        keywords=keywords,
+        inquiry_flag=inquiry_flag,
+        similar_comments=similar_comments,
+        source_comments=source_comments,
+    )
+    action_text = _compose_resolution_action_text(bundle)
+    return {
+        "action_text": action_text,
+        "action_domain": bundle.get("action_domain", "operations / service"),
+        "evidence_trace": {
+            "representative_evidence": bundle.get("representative_evidence", ""),
+            "similar_evidence": bundle.get("similar_evidence", []),
+            "similar_count": int(bundle.get("similar_count", 0) or 0),
+            "journey_stage": bundle.get("journey_stage", ""),
+            "journey_inferred": bool(bundle.get("journey_inferred", False)),
+            "polarity": bundle.get("sentiment", sentiment_value),
+            "mixed_flag": bool(bundle.get("mixed_flag", False)),
+            "signal_name": bundle.get("signal_name", "general_experience"),
+            "context_evidence": bundle.get("context_evidence", ""),
+            "focus_points": bundle.get("focus_points", []),
+            "context_tags": bundle.get("context_tags", []),
+            "insufficient_reasons": bundle.get("insufficient_reasons", []),
+        },
+        "insufficient_evidence": bool(bundle.get("insufficient_evidence", False)),
+    }
 
 
 ASPECT_LABEL_KO = {
@@ -4555,13 +5141,19 @@ def _render_representative_nlp_panel(
         source_comments=source_comments,
         negative_context=negative_context,
     )
-    action_point = _build_resolution_point(
+    action_payload = _build_resolution_point(
         working_selected=working_selected,
         sentiment_name=sentiment_value,
         keywords=core_points or keywords,
         inquiry_flag=inquiry_flag,
         negative_context=negative_context,
+        similar_comments=similar_comments,
+        source_comments=source_comments,
     )
+    if isinstance(action_payload, dict):
+        action_point = _safe_text(action_payload.get("action_text", ""))
+    else:
+        action_point = _safe_text(action_payload)
     insight_layer = _build_insight_layer(
         working_selected=working_selected,
         sentiment_name=sentiment_value,
@@ -4682,10 +5274,15 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             cej_val = _safe_text(selected.get(COL_CEJ, ""))
             brand_val = _safe_text(selected.get(COL_BRAND, ""))
             rep_id = _safe_text(selected.get("comment_id", selected.get("source_content_id", selected.get("opinion_id", ""))))
-            video_id = _safe_text(selected.get("video_id", "")) or _safe_text(working_selected.get("video_id", ""))
             pool = source_comments if source_comments is not None else pd.DataFrame()
-            similar_comments = _build_similar_comments(pool, selected, working_selected, sentiment_name, rep_id, video_id)
-            similar_count = len(similar_comments)
+            similar_comments, similar_meta = _build_canonical_similar_comments(pool, selected, working_selected, sentiment_name, rep_id)
+            similar_count = int(similar_meta.get("cluster_size", len(similar_comments)))
+            insufficient_evidence = bool(similar_meta.get("insufficient_evidence", similar_count < 3))
+            if similar_count != len(similar_comments):
+                raise RuntimeError(
+                    f"similar-count mismatch detected for representative {rep_id}: "
+                    f"meta={similar_count}, frame={len(similar_comments)}"
+                )
 
             # ============================================================
             # HEADER: 번호 + 토픽명 + 메타 배지
@@ -4752,7 +5349,7 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
             # ============================================================
             # 유사 댓글
             # ============================================================
-            if similar_count >= 3:
+            if similar_count >= 3 and not insufficient_evidence:
                 with st.expander(f"유사 댓글 {similar_count:,}건"):
                     st.caption(f"현재 필터에서 매칭된 유사 댓글: {similar_count:,}건")
                     basis_labels = _build_similarity_basis_labels(working_selected, sentiment_name)
@@ -4762,6 +5359,11 @@ def render_comment_table(comment_showcase: pd.DataFrame, key_prefix: str, source
                     if similar_count > 5:
                         st.caption(f"외 {similar_count - 5:,}건 더...")
                     csv_bytes = similar_comments.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    if similar_count != len(similar_comments):
+                        raise RuntimeError(
+                            f"similar-count mismatch detected for representative {rep_id} before CSV export: "
+                            f"count={similar_count}, csv_rows={len(similar_comments)}"
+                        )
                     st.download_button(
                         label="CSV 다운로드",
                         data=csv_bytes,
@@ -5099,7 +5701,11 @@ def build_video_summary(filtered_comments: pd.DataFrame, filtered_videos: pd.Dat
     return summary
 
 
-def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.DataFrame) -> None:
+def render_video_summary_page(
+    all_comments: pd.DataFrame,
+    filtered_videos: pd.DataFrame,
+    analysis_non_trash: pd.DataFrame | None = None,
+) -> None:
     st.markdown("### 영상 분석 요약")
     st.caption("이 화면은 결론이 아니라 탐색 관문입니다. 한 행에서 ‘무슨 언급이 있었고(정성), 반응 밀도가 어떠한지(정량)’를 함께 보고 다음 확인 영상을 고를 수 있습니다.")
 
@@ -5191,10 +5797,18 @@ def render_video_summary_page(all_comments: pd.DataFrame, filtered_videos: pd.Da
         st.warning("선택한 영상의 요약 데이터를 찾을 수 없습니다.")
         return
     selected_row = matched_rows.iloc[0]
-    render_video_detail_page(analysis_comments, selected_row)
+    render_video_detail_page(
+        analysis_comments,
+        selected_row,
+        analysis_non_trash=analysis_non_trash,
+    )
 
 
-def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd.Series) -> None:
+def render_video_detail_page(
+    filtered_comments: pd.DataFrame,
+    selected_video: pd.Series,
+    analysis_non_trash: pd.DataFrame | None = None,
+) -> None:
     video_id = selected_video.get("video_id")
     video_comments = filtered_comments[filtered_comments["video_id"] == video_id].copy()
 
@@ -5249,11 +5863,17 @@ def render_video_detail_page(filtered_comments: pd.DataFrame, selected_video: pd
     st.altair_chart(chart, width="stretch")
 
     with st.container(border=True):
+        # Similar comments must always come from canonical analysis_non_trash source pool.
+        canonical_pool = analysis_non_trash.copy() if analysis_non_trash is not None else pd.DataFrame()
+        if not canonical_pool.empty and "video_id" in canonical_pool.columns:
+            canonical_pool = canonical_pool[canonical_pool["video_id"] == video_id].copy()
+        video_similar_pool = _canonicalize_similar_source_pool(canonical_pool)
         render_representative_comments(
             filtered_comments=video_comments,
             representative_bundles=None,
             opinion_units=None,
             key_suffix=f"_vid_{video_id}",
+            similar_source_pool=video_similar_pool,
         )
 
     with st.container(border=True):
@@ -5887,6 +6507,15 @@ def main() -> None:
         return
     comments_scored, videos_df = ensure_lg_relevance_columns(comments_raw, videos_raw)
     comments_df = add_localized_columns(comments_scored)
+    analysis_non_trash_raw = data.get("analysis_non_trash", pd.DataFrame()).copy()
+    if analysis_non_trash_raw.empty:
+        analysis_comments_raw = data.get("analysis_comments", pd.DataFrame()).copy()
+        if not analysis_comments_raw.empty:
+            analysis_included_series = analysis_comments_raw.get("analysis_included", pd.Series(True, index=analysis_comments_raw.index)).fillna(False).astype(bool)
+            hygiene_series = analysis_comments_raw.get("hygiene_class", pd.Series("strategic", index=analysis_comments_raw.index)).fillna("").astype(str).str.lower()
+            analysis_non_trash_raw = analysis_comments_raw[analysis_included_series & hygiene_series.ne("trash")].copy()
+    if not analysis_non_trash_raw.empty:
+        analysis_non_trash_raw = add_localized_columns(analysis_non_trash_raw)
     if comments_df.empty:
         st.warning("표시할 분석 결과가 없습니다. 먼저 데이터를 수집해주세요.")
         return
@@ -5920,6 +6549,7 @@ def main() -> None:
         selected_filters,
         data.get("representative_bundles", pd.DataFrame()),
         data.get("opinion_units", pd.DataFrame()),
+        analysis_non_trash_raw,
     )
 
     filtered_comments = bundle["comments"]
@@ -6269,6 +6899,7 @@ def main() -> None:
                 bundle.get("representative_comments", filtered_comments),
                 bundle.get("representative_bundles", pd.DataFrame()),
                 bundle.get("opinion_units", pd.DataFrame()),
+                similar_source_pool=bundle.get("analysis_non_trash", pd.DataFrame()),
             )
 
         with st.container(border=True):
@@ -6280,7 +6911,11 @@ def main() -> None:
             render_keyword_panel(filtered_comments, "positive", "긍정 키워드 비중")
 
     with tab_videos:
-        render_video_summary_page(all_comments, filtered_videos)
+        render_video_summary_page(
+            all_comments,
+            filtered_videos,
+            analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
+        )
 
 
 if __name__ == "__main__":

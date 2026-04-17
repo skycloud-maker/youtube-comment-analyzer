@@ -31,8 +31,19 @@ class NormalizePipeline:
             normalized_comments["comment_quality"] = normalized_comments["text_original"].map(classify_comment_quality)
             normalized_comments["comment_validity"] = normalized_comments["comment_quality"].map(lambda value: "valid" if value == "valid" else "excluded")
             normalized_comments["exclusion_reason"] = normalized_comments["comment_quality"].where(normalized_comments["comment_validity"] == "excluded", pd.NA)
-            normalized_comments["analysis_included"] = normalized_comments["comment_validity"].eq("valid") & normalized_comments["cleaned_text"].ne("")
+            normalized_comments["hygiene_class"] = normalized_comments["comment_validity"].map(lambda value: "strategic" if value == "valid" else "trash")
+            normalized_comments["analysis_included"] = (
+                normalized_comments["comment_validity"].eq("valid")
+                & normalized_comments["cleaned_text"].ne("")
+                & normalized_comments["hygiene_class"].ne("trash")
+            )
             normalized_comments["removed_reason"] = normalized_comments["exclusion_reason"].fillna("")
+            normalized_comments["sentiment_final"] = pd.NA
+            normalized_comments["mixed_flag"] = False
+            normalized_comments["inquiry_flag"] = False
+            normalized_comments["journey_stage"] = pd.NA
+            normalized_comments["judgment_axes"] = pd.NA
+            normalized_comments["representative_eligibility"] = pd.NA
             pii_payload = normalized_comments["text_original"].map(detect_pii)
             normalized_comments["pii_flag"] = pii_payload.map(lambda item: item[0])
             normalized_comments["pii_types"] = pii_payload.map(lambda item: item[1])

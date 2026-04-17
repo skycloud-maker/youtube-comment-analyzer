@@ -88,6 +88,75 @@ def test_representative_comments_deduplicate_same_issue_text():
     assert len(representative) == 1
 
 
+def test_representative_comments_use_comment_level_canonical_fields():
+    comments = pd.DataFrame(
+        [
+            {
+                "comment_id": "c-pos",
+                "text_display": "처음엔 걱정했는데 오래 써도 괜찮아요",
+                "cleaned_text": "처음엔 걱정했는데 오래 써도 괜찮아요",
+                "sentiment_label": "negative",
+                "sentiment_final": "positive",
+                "product_related": True,
+                "classification_type": "complaint",
+                "representative_decision": "strong_candidate",
+                "representative_score": 30,
+                "like_count": 20,
+                "sentiment_score": 0.7,
+                "analysis_included": True,
+                "hygiene_class": "strategic",
+                "representative_eligibility": True,
+                "product": "dryer",
+                "topic_label": "성능",
+            },
+            {
+                "comment_id": "c-mixed",
+                "text_display": "성능은 좋은데 소음이 커서 애매해요",
+                "cleaned_text": "성능은 좋은데 소음이 커서 애매해요",
+                "sentiment_label": "negative",
+                "sentiment_final": "mixed",
+                "product_related": True,
+                "classification_type": "complaint",
+                "representative_decision": "strong_candidate",
+                "representative_score": 29,
+                "like_count": 18,
+                "sentiment_score": -0.2,
+                "analysis_included": True,
+                "hygiene_class": "strategic",
+                "representative_eligibility": True,
+                "product": "dryer",
+                "topic_label": "성능",
+            },
+            {
+                "comment_id": "c-trash",
+                "text_display": "링크 클릭하고 사세요",
+                "cleaned_text": "링크 클릭하고 사세요",
+                "sentiment_label": "negative",
+                "sentiment_final": "negative",
+                "product_related": True,
+                "classification_type": "complaint",
+                "representative_decision": "strong_candidate",
+                "representative_score": 99,
+                "like_count": 100,
+                "sentiment_score": -0.9,
+                "analysis_included": True,
+                "hygiene_class": "trash",
+                "representative_eligibility": True,
+                "product": "dryer",
+                "topic_label": "성능",
+            },
+        ]
+    )
+
+    representative = AnalyticsPipeline._representative_comments(comments)
+    ids = set(representative["comment_id"].tolist())
+    assert "c-trash" not in ids
+    assert {"c-pos", "c-mixed"}.issubset(ids)
+    sentiment_map = representative.set_index("comment_id")["sentiment_label"].to_dict()
+    assert sentiment_map["c-pos"] == "positive"
+    assert sentiment_map["c-mixed"] == "mixed"
+
+
 def test_representative_bundles_skip_inquiry_only_rows():
     opinion_units = pd.DataFrame([
         {

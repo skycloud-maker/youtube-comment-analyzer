@@ -110,6 +110,58 @@ def test_build_comment_showcase_uses_pipeline_columns_without_reanalysis() -> No
     assert row["display_classification_type"] == "complaint"
 
 
+def test_build_comment_showcase_respects_canonical_truth_filters() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "comment_id": "keep-negative",
+                "text_display": "설치 후 진동이 심해요",
+                "cleaned_text": "설치 후 진동이 심해요",
+                "sentiment_label": "positive",
+                "sentiment_final": "negative",
+                "comment_validity": "valid",
+                "analysis_included": True,
+                "hygiene_class": "strategic",
+                "representative_eligibility": True,
+                "like_count": 5,
+                "text_length": 11,
+            },
+            {
+                "comment_id": "drop-trash",
+                "text_display": "쿠팡 링크로 구매하세요",
+                "cleaned_text": "쿠팡 링크로 구매하세요",
+                "sentiment_label": "negative",
+                "sentiment_final": "negative",
+                "comment_validity": "valid",
+                "analysis_included": True,
+                "hygiene_class": "trash",
+                "representative_eligibility": True,
+                "like_count": 99,
+                "text_length": 14,
+            },
+            {
+                "comment_id": "drop-ineligible",
+                "text_display": "문의드려요",
+                "cleaned_text": "문의드려요",
+                "sentiment_label": "negative",
+                "sentiment_final": "negative",
+                "comment_validity": "valid",
+                "analysis_included": True,
+                "hygiene_class": "supporting",
+                "representative_eligibility": False,
+                "like_count": 12,
+                "text_length": 5,
+            },
+        ]
+    )
+
+    showcase = build_comment_showcase(frame, sentiment="negative", limit=5)
+    assert len(showcase) == 1
+    row = showcase.iloc[0]
+    assert row["comment_id"] == "keep-negative"
+    assert row["display_sentiment"] == "negative"
+
+
 def test_missing_data_message_mentions_required_files(monkeypatch) -> None:
     monkeypatch.setattr("src.dashboard_app._iter_dashboard_run_dirs", lambda: [])
     message = _build_missing_data_message()
