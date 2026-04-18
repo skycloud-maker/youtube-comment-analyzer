@@ -34,6 +34,7 @@ from src.analytics.clustering import assign_clusters
 from src.analytics.descriptive import build_descriptive_metrics
 from src.analytics.keywords import extract_keywords
 from src.analytics.sentiment import NLP_ANALYZER_AVAILABLE, _build_nlp_router, score_sentiment
+from src.analytics.strategy_aggregator import build_strategy_insight_aggregates
 from src.analytics.topics import infer_topic
 from src.analytics.trends import build_issue_keyword_status, build_weekly_keyword_trend, build_weekly_sentiment_trend
 from src.utils.io import ensure_dir, write_dataframe
@@ -291,6 +292,10 @@ class AnalyticsPipeline:
         nlp_inquiry_summary = build_inquiry_summary(analysis_non_trash)
         nlp_product_mentions = build_product_mention_summary(analysis_non_trash)
         nlp_sentiment_dist = build_nlp_sentiment_summary(analysis_non_trash)
+        strategy_outputs = build_strategy_insight_aggregates(
+            analysis_non_trash=analysis_non_trash,
+            representative_comments=representative_comments,
+        )
 
         outputs = {
             **metrics,
@@ -298,6 +303,7 @@ class AnalyticsPipeline:
             "comment_truth": comment_truth,
             "analysis_comments": analysis_comments,
             "analysis_non_trash": analysis_non_trash,
+            "analysis_strategic": analysis_strategic,
             "opinion_units": opinion_units,
             "representative_bundles": representative_bundles,
             "monitoring_summary": monitoring_summary,
@@ -319,6 +325,7 @@ class AnalyticsPipeline:
             "nlp_inquiry_summary": nlp_inquiry_summary,
             "nlp_product_mentions": nlp_product_mentions,
             "nlp_sentiment_distribution": nlp_sentiment_dist,
+            **strategy_outputs,
         }
 
         run_dir = ensure_dir(self.processed_dir / run_id)
