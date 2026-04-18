@@ -15,7 +15,9 @@ import streamlit as st
 
 from src import dashboard_app as legacy
 
+_ENTRY_SEARCH_KEY = "v2_entry_search_query"
 _FORCE_WIDE_SCOPE_KEY = "v2_force_wide_scope"
+_PENDING_RESET_FILTERS_KEY = "v2_pending_reset_filters"
 
 
 _JOURNEY_KO = {
@@ -510,8 +512,35 @@ def _apply_entry_search(top_issues: pd.DataFrame, search_query: str) -> pd.DataF
     return top_issues[mask].reset_index(drop=True)
 
 
-def _render_data_controls(active_mode: str, active_snapshot_run: str) -> None:
+def _reset_sidebar_filters(options: dict[str, list[str]]) -> None:
+    st.session_state["filter_products"] = list(options.get("products", []))
+    st.session_state["filter_regions"] = list(options.get("regions", []))
+    st.session_state["filter_brands"] = list(options.get("brands", []))
+    st.session_state["filter_sentiments"] = list(options.get("sentiments", []))
+    st.session_state["filter_cej"] = list(options.get("cej", []))
+    st.session_state["filter_keyword_query"] = ""
+    st.session_state["filter_keyword_mode"] = "AND"
+    st.session_state["filter_keyword_mode_label"] = "AND(모두 포함)"
+    st.session_state[_ENTRY_SEARCH_KEY] = ""
+    st.session_state[_FORCE_WIDE_SCOPE_KEY] = False
+
+
+def _render_data_controls(active_mode: str, active_snapshot_run: str) -> str:
     with st.sidebar:
+        st.markdown("### 빠른 검색")
+        st.caption("제품/브랜드/모델/키워드 검색")
+        search_query = st.text_input(
+            "검색어",
+            value=_safe_text(st.session_state.get(_ENTRY_SEARCH_KEY, "")),
+            key=_ENTRY_SEARCH_KEY,
+            placeholder="예: 냄새, 미닉스, 세탁기, lg",
+        )
+        if st.button("검색 초기화", width="stretch", type="secondary", key="v2_clear_search"):
+            st.session_state[_ENTRY_SEARCH_KEY] = ""
+            search_query = ""
+            st.rerun()
+
+        st.markdown("---")
         st.markdown("### 결과 모드")
         st.caption(f"현재 모드: {'예시 모드' if active_mode == 'sample' else '실행 결과 모드'}")
         st.caption("결과가 보이지 않으면 `예시 보기`로 화면을 확인하세요.")
@@ -545,6 +574,15 @@ def _render_data_controls(active_mode: str, active_snapshot_run: str) -> None:
             if active_snapshot_run != legacy.RUN_SNAPSHOT_ALL:
                 st.caption(f"현재 고정 실행 식별값: `{active_snapshot_run}`")
             st.caption("선택한 스냅샷은 로컬에 저장되어 다음 실행 시에도 자동 복원됩니다.")
+
+    return _safe_text(search_query).strip()
+
+
+def _apply_pending_filter_reset_if_needed(options: dict[str, list[str]]) -> None:
+    if not bool(st.session_state.get(_PENDING_RESET_FILTERS_KEY, False)):
+        return
+    _reset_sidebar_filters(options)
+    st.session_state[_PENDING_RESET_FILTERS_KEY] = False
 
 
 def _prepare_strategy_frame(frame: pd.DataFrame, level_type: str) -> pd.DataFrame:
@@ -836,7 +874,7 @@ def _load_context() -> DashboardContext | None:
         with st.spinner("최신 결과와 동기화 중..."):
             legacy._set_data_mode(active_mode, force_refresh=True, snapshot_run_id=active_snapshot_run)
 
-    _render_data_controls(active_mode, active_snapshot_run)
+    search_query = _render_data_controls(active_mode, active_snapshot_run)
     force_wide_scope = bool(st.session_state.get(_FORCE_WIDE_SCOPE_KEY, False))
 
     data = st.session_state.get(legacy.SESSION_DATA_BUNDLE_KEY, legacy._empty_dashboard_bundle())
@@ -865,8 +903,10 @@ def _load_context() -> DashboardContext | None:
         analysis_non_trash_raw = legacy.add_localized_columns(analysis_non_trash_raw)
 
     dashboard_options = legacy._build_dashboard_options(comments_df, videos_df)
+    _apply_pending_filter_reset_if_needed(dashboard_options)
     selected_filters = legacy._render_sidebar_filters(dashboard_options)
-    search_query = _safe_text(selected_filters.get("keyword_query", "")).strip()
+    sidebar_keyword_query = _safe_text(selected_filters.get("keyword_query", "")).strip()
+    effective_search_query = search_query or sidebar_keyword_query
     bundle = legacy.compute_filtered_bundle(
         comments_df,
         videos_df,
@@ -894,10 +934,10 @@ def _load_context() -> DashboardContext | None:
         selected_filters,
     )
     top_issues = _compose_top_issue_table(strategy_video, strategy_product, analysis_non_trash)
-    top_issues = _apply_entry_search(top_issues, search_query)
+    top_issues = _apply_entry_search(top_issues, effective_search_query)
 
     top_issues_fallback = _compose_top_issue_table(strategy_video_full, strategy_product_full, analysis_non_trash_raw)
-    top_issues_fallback = _apply_entry_search(top_issues_fallback, search_query)
+    top_issues_fallback = _apply_entry_search(top_issues_fallback, effective_search_query)
     if force_wide_scope and not top_issues_fallback.empty:
         top_issues = top_issues_fallback.copy()
 
@@ -916,7 +956,7 @@ def _load_context() -> DashboardContext | None:
         analysis_non_trash_full=analysis_non_trash_raw,
         representative_comments=representative_comments,
         dashboard_options=dashboard_options,
-        search_query=search_query,
+        search_query=effective_search_query,
         force_wide_scope=force_wide_scope,
     )
 
@@ -927,13 +967,25 @@ def _render_entry_recovery_panel(
     search_query: str,
 ) -> None:
     st.warning("현재 조건에서는 결과가 없습니다.")
-    st.caption("조건이 너무 좁거나 검색어가 과도하게 제한적일 수 있습니다.")
+    st.caption("조건이 너무 좁거나 검색어가 과도하게 제한적일 수 있습니다. 아래에서 바로 복구할 수 있습니다.")
     if search_query:
         st.caption(f"현재 검색어: `{search_query}`")
-    if has_fallback:
-        st.info("좌측 필터 메뉴에서 조건을 완화하거나 `실행 결과 새로고침`으로 최근 주요 이슈를 다시 확인하세요.")
-    else:
-        st.info("좌측 필터 메뉴에서 `필터 초기화 (전체 데이터 보기)` 또는 `예시 보기`로 화면을 복구하세요.")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("필터 초기화", width="stretch", type="secondary", key="v2_recover_reset_filters"):
+            st.session_state[_PENDING_RESET_FILTERS_KEY] = True
+            st.rerun()
+    with c2:
+        if st.button("예시 보기", width="stretch", type="secondary", key="v2_recover_sample_mode"):
+            st.session_state[_FORCE_WIDE_SCOPE_KEY] = False
+            legacy._set_data_mode("sample", force_refresh=False)
+            st.rerun()
+    with c3:
+        if st.button("최근 주요 이슈 보기", width="stretch", type="primary", key="v2_recover_wide_scope"):
+            st.session_state[_FORCE_WIDE_SCOPE_KEY] = True
+            st.rerun()
+    if not has_fallback:
+        st.caption("최근 주요 이슈가 바로 없으면, 넓은 범위로 재시도해 복구 경로를 제공합니다.")
 
 
 def main() -> None:
@@ -954,6 +1006,13 @@ def main() -> None:
     )
     st.caption(
         "전략 이슈를 먼저 확인하고, 우선순위와 액션 방향을 정한 뒤, 필요할 때만 대표 댓글/원천 댓글을 근거로 내려가도록 정보 구조를 재설계한 레이어입니다."
+    )
+    st.markdown(
+        '<div style="margin:8px 0 14px; padding:10px 12px; border-radius:10px; '
+        'background:#fef3c7; border:1px solid #f59e0b; color:#92400e; font-weight:800;">'
+        'DASHBOARD_V2 ACTIVE | ENTRY RECOVERY BUILD ACTIVE'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
     display_issues = ctx.top_issues.copy()
