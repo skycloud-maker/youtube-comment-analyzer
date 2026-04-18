@@ -152,3 +152,81 @@ def test_analytics_pipeline_enforces_hygiene_for_downstream(monkeypatch, tmp_pat
     analysis_comments = outputs["analysis_comments"]
     assert "c-trash" not in set(analysis_comments["comment_id"].tolist())
     assert set(analysis_comments["sentiment_label"].dropna().astype(str).str.lower().tolist()) <= {"positive", "negative", "neutral", "mixed", "trash"}
+
+
+def test_two_layer_taxonomy_assignment_is_meaningful():
+    comments = pd.DataFrame(
+        [
+            {
+                "comment_id": "j-1",
+                "video_id": "v1",
+                "text_display": "가격이 비싸서 구매 결정을 망설입니다. 약정 조건이 불안해요.",
+                "cleaned_text": "가격이 비싸서 구매 결정을 망설입니다 약정 조건이 불안해요",
+                "comment_validity": "valid",
+                "comment_quality": "valid",
+                "classification_type": "complaint",
+                "topic_label": "Performance",
+                "nlp_label": "negative",
+                "product_related": True,
+            },
+            {
+                "comment_id": "j-2",
+                "video_id": "v1",
+                "text_display": "세탁 소음이 커서 밤에 사용하기 불편하고 자동모드가 자주 멈춥니다.",
+                "cleaned_text": "세탁 소음이 커서 밤에 사용하기 불편하고 자동모드가 자주 멈춥니다",
+                "comment_validity": "valid",
+                "comment_quality": "valid",
+                "classification_type": "complaint",
+                "topic_label": "Performance",
+                "nlp_label": "negative",
+                "product_related": True,
+            },
+            {
+                "comment_id": "j-3",
+                "video_id": "v1",
+                "text_display": "세탁은 잘되지만 가격이 높아서 가성비가 아쉽습니다.",
+                "cleaned_text": "세탁은 잘되지만 가격이 높아서 가성비가 아쉽습니다",
+                "comment_validity": "valid",
+                "comment_quality": "valid",
+                "classification_type": "complaint",
+                "topic_label": "Performance",
+                "nlp_label": "mixed",
+                "product_related": True,
+            },
+        ]
+    )
+
+    truth = build_canonical_comment_truth(comments).set_index("comment_id")
+    assert truth.loc["j-1", "journey_stage"] == "purchase"
+    assert truth.loc["j-2", "journey_stage"] == "usage"
+    assert truth.loc["j-3", "journey_stage"] == "usage"
+
+    j2_axes = truth.loc["j-2", "judgment_axes"]
+    j3_axes = truth.loc["j-3", "judgment_axes"]
+    assert isinstance(j2_axes, list) and isinstance(j3_axes, list)
+    assert len(j2_axes) > 0 and len(j3_axes) > 0
+    assert j2_axes[0] != j3_axes[0]
+
+
+def test_taxonomy_handles_ambiguous_comment_safely():
+    comments = pd.DataFrame(
+        [
+            {
+                "comment_id": "amb-1",
+                "video_id": "v1",
+                "text_display": "좋네요.",
+                "cleaned_text": "좋네요",
+                "comment_validity": "valid",
+                "comment_quality": "valid",
+                "classification_type": "informational",
+                "nlp_label": "neutral",
+                "product_related": False,
+            }
+        ]
+    )
+
+    truth = build_canonical_comment_truth(comments)
+    row = truth.iloc[0]
+    assert pd.isna(row["journey_stage"])
+    assert row["judgment_axes"] == []
+    assert bool(row["representative_eligibility"]) is False

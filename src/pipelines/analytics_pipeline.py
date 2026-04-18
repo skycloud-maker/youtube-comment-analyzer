@@ -12,7 +12,11 @@ import pandas as pd
 
 from src.analytics.brands import infer_brand
 from src.analytics.comment_analysis import analyze_comment_with_context
-from src.analytics.comment_truth import CANONICAL_COMMENT_TRUTH_COLUMNS, build_canonical_comment_truth
+from src.analytics.comment_truth import (
+    CANONICAL_COMMENT_TRUTH_COLUMNS,
+    FIXED_JOURNEY_STAGES,
+    build_canonical_comment_truth,
+)
 from src.analytics.insight_engine import (
     build_inquiry_summary,
     build_keyword_insight_summary,
@@ -222,6 +226,10 @@ class AnalyticsPipeline:
         analysis_comments = analysis_comments[analysis_included_series.fillna(False)].copy()
         if not analysis_comments.empty and "sentiment_final" in analysis_comments.columns:
             analysis_comments["sentiment_label"] = analysis_comments["sentiment_final"].fillna(analysis_comments.get("sentiment_label"))
+            analysis_comments["journey_stage"] = analysis_comments.get("journey_stage", pd.Series(pd.NA, index=analysis_comments.index)).map(self._normalize_journey_stage_value)
+            analysis_comments["judgment_axes"] = analysis_comments.get("judgment_axes", pd.Series([[] for _ in range(len(analysis_comments))], index=analysis_comments.index)).map(self._normalize_judgment_axes)
+            analysis_comments["topic_label"] = analysis_comments.apply(self._topic_label_from_taxonomy, axis=1)
+            working_comments = self._merge_taxonomy_backfill(working_comments, analysis_comments)
 
         hygiene_series = (
             analysis_comments["hygiene_class"]
@@ -357,6 +365,78 @@ class AnalyticsPipeline:
         working = frame.drop(columns=merge_columns, errors="ignore").copy()
         payload_columns = [column for column in ["comment_id", *merge_columns] if column in comment_truth.columns]
         return working.merge(comment_truth[payload_columns], on="comment_id", how="left")
+
+    @staticmethod
+    def _normalize_journey_stage_value(value: Any) -> str:
+        text = str(value).strip().lower() if pd.notna(value) else ""
+        alias = {
+            "aware": "awareness",
+            "explore": "exploration",
+            "decide": "decision",
+            "deliver": "delivery",
+            "install": "delivery",
+            "installation": "delivery",
+            "onboard": "onboarding",
+            "on-board": "onboarding",
+            "use": "usage",
+            "maintain": "maintenance",
+            "replace": "replacement",
+            "s1 aware": "awareness",
+            "s2 explore": "exploration",
+            "s4 purchase": "purchase",
+            "s5 deliver": "delivery",
+            "s6 on-board": "onboarding",
+            "s7 use": "usage",
+            "s8 maintain": "maintenance",
+            "s9 replace": "replacement",
+        }
+        normalized = alias.get(text, text)
+        return normalized if normalized in FIXED_JOURNEY_STAGES else ""
+
+    @staticmethod
+    def _normalize_judgment_axes(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, tuple):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith("[") and raw.endswith("]"):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [part.strip() for part in re.split(r"[\|,;/]+", raw) if part.strip()]
+        return []
+
+    @classmethod
+    def _primary_judgment_axis(cls, row: pd.Series) -> str:
+        axes = cls._normalize_judgment_axes(row.get("judgment_axes", []))
+        if axes:
+            return axes[0]
+        fallback = row.get("topic_label", row.get("classification_type", "general"))
+        return str(fallback).strip() if pd.notna(fallback) and str(fallback).strip() else "general"
+
+    @classmethod
+    def _topic_label_from_taxonomy(cls, row: pd.Series) -> str:
+        axis = cls._primary_judgment_axis(row)
+        if "_" not in axis:
+            return axis
+        return axis.replace("_", " ").title()
+
+    @classmethod
+    def _merge_taxonomy_backfill(cls, frame: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty or source.empty or "comment_id" not in frame.columns:
+            return frame
+        keep = source[[column for column in ["comment_id", "journey_stage", "judgment_axes", "topic_label"] if column in source.columns]].drop_duplicates(subset=["comment_id"])
+        merged = frame.drop(columns=["journey_stage", "judgment_axes", "topic_label"], errors="ignore").merge(keep, on="comment_id", how="left")
+        if "topic_label" in frame.columns:
+            merged["topic_label"] = merged["topic_label"].fillna(frame.get("topic_label"))
+        return merged
 
     def _annotate_video_relevance(self, videos_df: pd.DataFrame) -> pd.DataFrame:
         if videos_df.empty:
@@ -536,14 +616,17 @@ class AnalyticsPipeline:
                 subset["_decision_rank"] = 9
             if "representative_score" not in subset.columns:
                 subset["representative_score"] = 0
-            cej_source = subset.get("customer_journey_stage", subset.get("cej_scene_code", pd.Series("", index=subset.index)))
+            cej_source = subset.get(
+                "journey_stage",
+                subset.get("customer_journey_stage", subset.get("cej_scene_code", pd.Series("", index=subset.index))),
+            )
             subset["_journey_relevance"] = cej_source.fillna("").astype(str).map(lambda value: 0 if value.strip() in {"", "S10 Other", "기타"} else 1)
             subset["_sentiment_strength"] = pd.to_numeric(subset.get("sentiment_score", pd.Series(0.0, index=subset.index)), errors="coerce").fillna(0.0).abs()
             subset["_dedup_key"] = subset.apply(
                 lambda row: "|".join([
                     str(row.get("product", "")) if pd.notna(row.get("product", "")) else "",
-                    str(row.get("customer_journey_stage", row.get("cej_scene_code", ""))) if pd.notna(row.get("customer_journey_stage", row.get("cej_scene_code", ""))) else "",
-                    (str(row.get("topic_label")) if pd.notna(row.get("topic_label")) else "") or (str(row.get("classification_type")) if pd.notna(row.get("classification_type")) else "general") or "general",
+                    str(row.get("journey_stage", row.get("customer_journey_stage", row.get("cej_scene_code", "")))) if pd.notna(row.get("journey_stage", row.get("customer_journey_stage", row.get("cej_scene_code", "")))) else "",
+                    AnalyticsPipeline._primary_judgment_axis(row),
                     _canonical_representative_text(row.get("cleaned_text", row.get("text_display", ""))),
                 ]),
                 axis=1,
