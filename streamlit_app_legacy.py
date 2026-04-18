@@ -1,4 +1,5 @@
-from src.dashboard_v2 import main
+from src.dashboard_app import main
+
 
 if __name__ == "__main__":
     main()

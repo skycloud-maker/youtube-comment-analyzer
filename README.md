@@ -157,6 +157,13 @@ Streamlit dashboard now has two intentionally separated flows:
   - 대시보드에서 `python -m src.main run ...`을 실행해 실제 수집+분석 수행
   - 완료 후 실데이터 모드로 자동 갱신
 
+### Dashboard entrypoints
+
+- 기본(Strategy-first 레이어): `streamlit run streamlit_app.py`
+  - 새 정보 구조: `전략 이슈 → 우선순위/액션 → 근거 드릴다운`
+- 레거시(검증/비교 레이어): `streamlit run streamlit_app_legacy.py`
+  - 기존 `src/dashboard_app.py` 화면을 그대로 유지
+
 ### Startup loading behavior
 
 - 결과 파일(`videos_normalized.parquet`, `comments.parquet`)이 존재하면 앱 시작 시 자동 로딩합니다.
@@ -168,8 +175,10 @@ Streamlit dashboard now has two intentionally separated flows:
 
 - Layer 1 (`src/pipelines/analytics_pipeline.py` + `src/analytics/*`):
   - 댓글 단위 분류(감성, 문의 여부 등) 단일 기준 산출
-- Layer 2 (`src/dashboard_app.py`):
-  - 영상 맥락 인사이트/해결 포인트 생성 및 시각화
+- Layer 2 (Legacy UI: `src/dashboard_app.py`):
+  - 검증/회귀 체크용 레거시 대시보드
+- Layer 3 (Strategy-first UI: `src/dashboard_v2.py`):
+  - 전략 이슈를 랜딩 객체로 먼저 제시하고, 대표/유사/원천 댓글은 근거 드릴다운으로 제공
   - 댓글 단위 재분석 금지 (대시보드 내부 별도 NLP 분기 제거)
 
 ## Outputs

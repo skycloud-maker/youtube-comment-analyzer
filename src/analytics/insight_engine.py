@@ -9,12 +9,102 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import Counter
 from typing import Any
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_INQUIRY_NOISE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"https?://",
+        r"\baffiliate\b",
+        r"\bsponsor(?:ed|ing)?\b",
+        r"\bpromo\s*code\b",
+        r"\bdiscount\s*code\b",
+        r"\bcoupon\b",
+        r"\bcoupang\s*partners?\b",
+        r"\bjoint\s*purchase\b",
+        r"\binvestment\b",
+        r"\bstock\w*\b",
+        r"\brestock\w*\b",
+        r"\bin\s+stock\b",
+        r"\bout\s+of\s+stock\b",
+        r"\bsubscribe\s*event\b",
+    ]
+)
+_REAL_INQUIRY_MARKERS = (
+    "어떻게",
+    "어디",
+    "왜",
+    "가능",
+    "문의",
+    "비교",
+    "추천",
+    "설치",
+    "고장",
+    "수리",
+    "환불",
+    "교체",
+    "어떤",
+    "얼마",
+    "몇",
+    "되나요",
+    "인가요",
+    "까요",
+    "how",
+    "why",
+    "where",
+    "which",
+    "can i",
+    "should i",
+    "does it",
+    "is it",
+    "repair",
+    "install",
+    "price",
+    "cost",
+)
+_REAL_DECISION_USAGE_MARKERS = (
+    "고장",
+    "수리",
+    "설치",
+    "교체",
+    "환불",
+    "비용",
+    "가격",
+    "비교",
+    "추천",
+    "사용",
+    "as",
+    "a/s",
+    "repair",
+    "install",
+    "replacement",
+    "warranty",
+    "price",
+    "cost",
+)
+_NON_INQUIRY_NARRATIVE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\bi used to\b",
+        r"\bi can still remember\b",
+        r"\bi noticed years ago\b",
+        r"\bi'd like to share\b",
+        r"\bthought i'd share\b",
+        r"\bgreat video\b",
+        r"\bthank(s| you)\b",
+        r"\btip\b",
+        r"\bstock\w*\b",
+        r"\brestock\w*\b",
+        r"\bin\s+stock\b",
+        r"\bout\s+of\s+stock\b",
+    ]
+)
 
 
 def build_topic_insight_summary(analysis_df: pd.DataFrame) -> pd.DataFrame:
@@ -100,11 +190,18 @@ def build_inquiry_summary(analysis_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["comment_id", "text", "nlp_summary", "nlp_topics", "is_rhetorical", "product_mentions"])
 
     inquiry_mask = analysis_df["nlp_is_inquiry"].map(_is_truthy)
+    if "inquiry_flag" in analysis_df.columns:
+        inquiry_mask = inquiry_mask | analysis_df["inquiry_flag"].map(_is_truthy)
     inquiries = analysis_df[inquiry_mask].copy()
     if inquiries.empty:
         return pd.DataFrame(columns=["comment_id", "text", "nlp_summary", "nlp_topics", "is_rhetorical", "product_mentions"])
 
     text_col = "cleaned_text" if "cleaned_text" in inquiries.columns else "text_display"
+    text_series = inquiries.get(text_col, "").fillna("").astype(str)
+    inquiries = inquiries[text_series.map(_is_real_customer_inquiry)].copy()
+    if inquiries.empty:
+        return pd.DataFrame(columns=["comment_id", "text", "nlp_summary", "nlp_topics", "is_rhetorical", "product_mentions"])
+
     result = inquiries[["comment_id"]].copy()
     result["text"] = inquiries.get(text_col, "").fillna("")
     result["nlp_summary"] = inquiries.get("nlp_summary", "").fillna("")
@@ -203,6 +300,27 @@ def _is_truthy(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes", "y", "t"}
     return False
+
+
+def _is_real_customer_inquiry(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    lowered = value.lower()
+    if any(pattern.search(lowered) for pattern in _INQUIRY_NOISE_PATTERNS):
+        return False
+    has_question_mark = "?" in value
+    has_inquiry_marker = any(marker in lowered for marker in _REAL_INQUIRY_MARKERS)
+    if not (has_question_mark or has_inquiry_marker):
+        return False
+    if any(pattern.search(lowered) for pattern in _NON_INQUIRY_NARRATIVE_PATTERNS) and not has_question_mark:
+        return False
+    has_decision_usage_marker = any(marker in lowered for marker in _REAL_DECISION_USAGE_MARKERS)
+    if not has_decision_usage_marker and len(value) > 140:
+        return False
+    if len(value) > 520 and not has_question_mark:
+        return False
+    return True
 
 
 def _parse_dict(value: Any) -> dict[str, str]:

@@ -3267,6 +3267,41 @@ def _intent_tokens_from_row(row: pd.Series) -> set[str]:
     return {token for token in tokens if token}
 
 
+def _cohesion_terms_from_row(row: pd.Series, limit: int = 14) -> set[str]:
+    terms: set[str] = set()
+    terms.update(_intent_tokens_from_row(row))
+    text_blob = " ".join(
+        [
+            _safe_text(row.get(COL_ORIGINAL, "")),
+            _safe_text(row.get("cleaned_text", "")),
+            _safe_text(row.get("text_display", "")),
+        ]
+    ).lower()
+    stopwords = {
+        "this", "that", "with", "from", "have", "there", "were", "been", "very", "really", "just",
+        "그리고", "그냥", "진짜", "너무", "정말", "제품", "사용", "관련", "문제", "해당",
+    }
+    for token in re.findall(r"[a-zA-Z가-힣]{2,}", text_blob):
+        clean = _safe_text(token).strip().lower()
+        if not clean or clean in stopwords:
+            continue
+        terms.add(clean)
+        if len(terms) >= limit:
+            break
+    return {term for term in terms if term}
+
+
+def _cohesion_score_for_candidate(candidate: pd.Series, seed_terms: set[str]) -> int:
+    candidate_terms = _cohesion_terms_from_row(candidate, limit=20)
+    if not candidate_terms or not seed_terms:
+        return 0
+    overlap = len(candidate_terms.intersection(seed_terms))
+    if overlap:
+        return overlap
+    # Fallback to intent token overlap if lexical tokens miss.
+    return len(_intent_tokens_from_row(candidate).intersection(seed_terms))
+
+
 def _canonicalize_similar_source_pool(pool: pd.DataFrame) -> pd.DataFrame:
     if pool is None or pool.empty:
         return pd.DataFrame()
@@ -3364,6 +3399,37 @@ def _build_canonical_similar_comments(
     if working.empty:
         return pd.DataFrame(), {"cluster_size": 0, "insufficient_evidence": True, "reason": "intent_mismatch"}
 
+    cohesion_warning = False
+    soft_cap = 3200
+    hard_cap = 2400
+    if len(working) > soft_cap:
+        seed_terms = _cohesion_terms_from_row(working_selected)
+        if not seed_terms:
+            seed_terms = _cohesion_terms_from_row(selected)
+        if seed_terms:
+            working["_cohesion_score"] = working.apply(lambda row: _cohesion_score_for_candidate(row, seed_terms), axis=1)
+            strict = working[working["_cohesion_score"] >= 2].copy()
+            if len(strict) >= 3:
+                working = strict
+            else:
+                loose = working[working["_cohesion_score"] >= 1].copy()
+                if len(loose) >= 3:
+                    working = loose
+        if len(working) > hard_cap:
+            cohesion_warning = True
+            if "_cohesion_score" not in working.columns:
+                working["_cohesion_score"] = 1
+            like_source = pd.to_numeric(
+                working.get(COL_LIKES, working.get("likes_count", working.get("like_count", pd.Series(0, index=working.index)))),
+                errors="coerce",
+            ).fillna(0.0)
+            working["_like_score"] = like_source
+            working = (
+                working.sort_values(["_cohesion_score", "_like_score"], ascending=[False, False], na_position="last")
+                .head(hard_cap)
+                .copy()
+            )
+
     display_rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for _, row in working.iterrows():
@@ -3397,7 +3463,13 @@ def _build_canonical_similar_comments(
             "insufficient_evidence": True,
             "reason": "cluster_lt_3",
         }
-    return result, {"cluster_size": cluster_size, "candidate_count": cluster_size, "insufficient_evidence": False, "reason": "ok"}
+    return result, {
+        "cluster_size": cluster_size,
+        "candidate_count": cluster_size,
+        "insufficient_evidence": False,
+        "cohesion_warning": cohesion_warning,
+        "reason": "cohesion_guard_applied" if cohesion_warning else "ok",
+    }
 
 
 def _localized_video_title(title: str) -> str:
@@ -4723,6 +4795,24 @@ def _build_resolution_evidence_bundle(
 
 
 def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
+    def _pick_action_variant(options: str | list[str], signal: str) -> str:
+        if isinstance(options, str):
+            return options
+        candidates = [item for item in options if _safe_text(item)]
+        if not candidates:
+            return ""
+        seed = "|".join(
+            [
+                signal,
+                _safe_text(bundle.get("journey_stage", "")),
+                _safe_text(bundle.get("representative_evidence", "")),
+                str(int(bundle.get("similar_count", 0) or 0)),
+            ]
+        )
+        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+        idx = int(digest[:8], 16) % len(candidates)
+        return candidates[idx]
+
     product_label = _safe_text(bundle.get("product_label", "해당 제품")) or "해당 제품"
     sentiment_value = _safe_text(bundle.get("sentiment", "neutral")).lower()
     journey_stage = _safe_text(bundle.get("journey_stage", ""))
@@ -4755,49 +4845,105 @@ def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
     context_phrase = f"영상 맥락에서는 '{context_evidence}'가 함께 관찰" if context_evidence else ""
     connector = " / ".join([piece for piece in [supporting_phrase, similar_phrase, context_phrase] if piece])
 
-    negative_actions = {
-        "odor_leakage": f"{stage_phrase}에서 냄새 차단 실패가 반복되므로 밀폐 구조·배기 경로·필터 수명 조건을 실사용 환경 기준으로 재설계하세요.",
-        "consumable_burden": f"{stage_phrase}에서 소모품/교체 부담이 마찰이므로 교체 조건 안내와 구매 동선을 하나의 유지관리 시나리오로 통합하세요.",
-        "manual_intervention": f"{stage_phrase}에서 자동 처리 기대가 수동 개입으로 깨지므로 잔여물 부착 방지 설계와 자동 세정 가이드를 동시에 보강하세요.",
-        "reliability_failure": f"{stage_phrase}에서 기능 고장 신호가 뚜렷하므로 고장 유형별 재현 테스트와 부품 신뢰성 개선 항목을 제품 백로그 우선순위로 상향하세요.",
-        "service_response_gap": f"{stage_phrase}에서 A/S 응답 공백이 확인되므로 접수→진단→해결 리드타임 기준을 분리 관리하고 지연 원인별 대응 SLA를 고정하세요.",
-        "installation_delivery_gap": f"{stage_phrase}에서 설치·배송 경험 손실이 반복되므로 일정 안내, 현장 체크리스트, 설치 후 검수 절차를 한 흐름으로 재정의하세요.",
-        "pricing_contract_gap": f"{stage_phrase}에서 가격/약정 인식 충돌이 발생하므로 총비용·해지비용·약정 조건을 결제 직전 동일 화면에서 선명하게 고지하세요.",
-        "onboarding_guide_gap": f"{stage_phrase}에서 초기 사용 가이드 부족이 드러나므로 첫 사용 7일 가이드를 실제 실패 장면 중심으로 재작성하고 단계별 안내를 단축하세요.",
-        "message_expectation_gap": f"{stage_phrase}에서 메시지 기대와 실제 체감 간극이 커서 광고/상세 설명의 약속 범위를 실사용 조건 중심으로 재정렬해야 합니다.",
+    negative_actions: dict[str, str | list[str]] = {
+        "odor_leakage": [
+            f"{stage_phrase}에서 냄새 차단 실패가 반복되므로 밀폐 구조·배기 경로·필터 수명 조건을 실사용 환경 기준으로 재설계하세요.",
+            f"냄새 민원이 {stage_phrase}에서 누적되므로 {product_label}의 배기 구조와 필터 교체 기준을 분리 진단해 즉시 수정하세요.",
+        ],
+        "consumable_burden": [
+            f"{stage_phrase}에서 소모품/교체 부담이 마찰이므로 교체 조건 안내와 구매 동선을 하나의 유지관리 시나리오로 통합하세요.",
+            f"{product_label} 유지관리 부담이 {stage_phrase}에서 커지므로 소모품 교체 시점·비용·구매 경로를 단일 가이드로 정리하세요.",
+        ],
+        "manual_intervention": [
+            f"{stage_phrase}에서 자동 처리 기대가 수동 개입으로 깨지므로 잔여물 부착 방지 설계와 자동 세정 가이드를 동시에 보강하세요.",
+            f"수동 개입이 {stage_phrase} 핵심 불만으로 확인되므로 자동 처리 실패 구간을 줄이는 설계 보정과 사용 절차 단축을 병행하세요.",
+        ],
+        "reliability_failure": [
+            f"{stage_phrase}에서 기능 고장 신호가 뚜렷하므로 고장 유형별 재현 테스트와 부품 신뢰성 개선 항목을 제품 백로그 우선순위로 상향하세요.",
+            f"{product_label} 고장 패턴이 {stage_phrase}에서 반복되므로 재현 가능한 증상부터 부품/펌웨어 안정성 개선 과제로 즉시 분리하세요.",
+        ],
+        "service_response_gap": [
+            f"{stage_phrase}에서 A/S 응답 공백이 확인되므로 접수→진단→해결 리드타임 기준을 분리 관리하고 지연 원인별 대응 SLA를 고정하세요.",
+            f"A/S 지연이 {stage_phrase} 핵심 마찰로 확인되어 접수-현장방문-완료 구간별 SLA를 분리하고 누락 케이스를 주간 점검하세요.",
+            f"{stage_phrase} 고객경험 저하 원인이 대응 지연으로 수렴하므로 {product_label} A/S를 유형별 우선순위 큐로 운영해 병목을 줄이세요.",
+        ],
+        "installation_delivery_gap": [
+            f"{stage_phrase}에서 설치·배송 경험 손실이 반복되므로 일정 안내, 현장 체크리스트, 설치 후 검수 절차를 한 흐름으로 재정의하세요.",
+            f"설치/배송 오류가 {stage_phrase}에서 재발하므로 방문 전 사전안내와 설치 후 검수 항목을 고객 확인 단계까지 고정하세요.",
+        ],
+        "pricing_contract_gap": [
+            f"{stage_phrase}에서 가격/약정 인식 충돌이 발생하므로 총비용·해지비용·약정 조건을 결제 직전 동일 화면에서 선명하게 고지하세요.",
+            f"{stage_phrase} 의사결정에서 약정/해지 비용 혼선이 반복되어 결제 전 총비용과 계약 조건을 한 문맥으로 재배치해야 합니다.",
+        ],
+        "onboarding_guide_gap": [
+            f"{stage_phrase}에서 초기 사용 가이드 부족이 드러나므로 첫 사용 7일 가이드를 실제 실패 장면 중심으로 재작성하고 단계별 안내를 단축하세요.",
+            f"초기 세팅 실패가 {stage_phrase} 불만으로 반복되므로 첫 7일 온보딩 안내를 핵심 오류 장면 중심으로 재구성하세요.",
+        ],
+        "message_expectation_gap": [
+            f"{stage_phrase}에서 메시지 기대와 실제 체감 간극이 커서 광고/상세 설명의 약속 범위를 실사용 조건 중심으로 재정렬해야 합니다.",
+            f"콘텐츠 약속과 실사용 체감이 {stage_phrase}에서 어긋나므로 {product_label} 메시지를 실제 사용조건 중심으로 다시 정의하세요.",
+        ],
     }
-    positive_actions = {
-        "advocacy_signal": f"{stage_phrase}에서 추천/재구매 신호가 확인되므로 해당 강점을 후기 맥락과 함께 노출해 전환 근거를 강화하세요.",
-        "reliability_failure": f"{stage_phrase}에서 내구 강점이 긍정 신호로 작동하므로 장기간 사용 근거를 메시지·FAQ·비교표에 일관되게 연결하세요.",
-        "consumable_burden": f"{stage_phrase}에서 유지관리 편의가 강점으로 작동하므로 교체/세척이 쉬운 이유를 사용 시나리오 중심으로 강조하세요.",
+    positive_actions: dict[str, str | list[str]] = {
+        "advocacy_signal": [
+            f"{stage_phrase}에서 추천/재구매 신호가 확인되므로 해당 강점을 후기 맥락과 함께 노출해 전환 근거를 강화하세요.",
+            f"{stage_phrase}에서 추천 의도가 반복되므로 {product_label} 강점을 비교 근거와 묶어 재구매/추천 동선에 배치하세요.",
+        ],
+        "reliability_failure": [
+            f"{stage_phrase}에서 내구 강점이 긍정 신호로 작동하므로 장기간 사용 근거를 메시지·FAQ·비교표에 일관되게 연결하세요.",
+            f"내구 만족 신호가 {stage_phrase}에서 누적되어 장기 사용 사례를 핵심 메시지로 고정해 신뢰 인식을 확장하세요.",
+        ],
+        "consumable_burden": [
+            f"{stage_phrase}에서 유지관리 편의가 강점으로 작동하므로 교체/세척이 쉬운 이유를 사용 시나리오 중심으로 강조하세요.",
+            f"{product_label} 관리 편의 강점이 {stage_phrase}에서 확인되므로 세척·교체 절차의 단순성을 구체 사례와 함께 노출하세요.",
+        ],
     }
-    mixed_actions = {
-        "pricing_contract_gap": f"{stage_phrase}에서 가치 만족과 비용 불신이 동시에 나타나므로 가격 체계 투명화와 강점 메시지 노출을 분리해 재설계하세요.",
-        "service_response_gap": f"{stage_phrase}에서 성능 만족과 대응 불만이 함께 존재하므로 제품 강점 유지와 서비스 리드타임 개선을 병렬 과제로 운영하세요.",
-        "manual_intervention": f"{stage_phrase}에서 결과 만족과 수동 불편이 공존하므로 자동화 실패 구간을 줄이는 제품 보완과 사용 가이드를 함께 개편하세요.",
+    mixed_actions: dict[str, str | list[str]] = {
+        "pricing_contract_gap": [
+            f"{stage_phrase}에서 가치 만족과 비용 불신이 동시에 나타나므로 가격 체계 투명화와 강점 메시지 노출을 분리해 재설계하세요.",
+            f"가격 납득감과 성능 만족이 충돌하는 {stage_phrase} 구간이므로 비용 고지와 강점 커뮤니케이션을 분리 운영하세요.",
+        ],
+        "service_response_gap": [
+            f"{stage_phrase}에서 성능 만족과 대응 불만이 함께 존재하므로 제품 강점 유지와 서비스 리드타임 개선을 병렬 과제로 운영하세요.",
+            f"{stage_phrase}에서 만족과 불만이 동시에 관찰되어 기능 강점은 유지하되 A/S 응답 구간만 별도 개선 트랙으로 분리하세요.",
+        ],
+        "manual_intervention": [
+            f"{stage_phrase}에서 결과 만족과 수동 불편이 공존하므로 자동화 실패 구간을 줄이는 제품 보완과 사용 가이드를 함께 개편하세요.",
+            f"사용 결과 만족에도 수동 개입 피로가 남는 {stage_phrase} 구간이라 자동화 품질 보정과 가이드 간소화를 동시 추진하세요.",
+        ],
     }
 
     if mixed_flag:
-        action_core = mixed_actions.get(
+        action_core = _pick_action_variant(mixed_actions.get(
             signal_name,
             f"{stage_phrase}에서 기대 충족과 불편 신호가 동시에 관찰되어 강점 유지와 마찰 제거를 분리한 이중 실행 계획이 필요합니다.",
-        )
+        ), signal_name)
     elif sentiment_value == "positive":
-        action_core = positive_actions.get(
+        action_core = _pick_action_variant(positive_actions.get(
             signal_name,
             f"{stage_phrase}에서 확인된 '{focus_text}' 강점을 고객 의사결정 접점에 재사용해 추천·재구매 전환으로 연결하세요.",
-        )
+        ), signal_name)
     elif sentiment_value == "negative":
-        action_core = negative_actions.get(
+        action_core = _pick_action_variant(negative_actions.get(
             signal_name,
             f"{stage_phrase}에서 드러난 '{focus_text}' 마찰을 {action_domain} 영역의 우선 개선 항목으로 등록해 다음 배치에서 재검증하세요.",
-        )
+        ), signal_name)
     else:
         action_core = f"{stage_phrase}에서 신호가 혼재해 즉시 단정은 어렵습니다. '{focus_text}' 관련 증거를 추가 확보한 뒤 {action_domain} 실행안을 확정하세요."
 
+    lead_options = [
+        "실행 우선순위: ",
+        f"{stage_phrase} 개선 제안: ",
+        f"{action_domain} 실행안: ",
+        f"{product_label} 대응 제안: ",
+        "즉시 점검 포인트: ",
+    ]
+    lead_text = _pick_action_variant(lead_options, f"lead::{signal_name}")
+    composed_action = f"{lead_text}{action_core}"
+
     if connector:
-        return f"{action_core} ({repeated_phrase}; {connector})"
-    return f"{action_core} ({repeated_phrase})"
+        return f"{composed_action} ({repeated_phrase}; {connector})"
+    return f"{composed_action} ({repeated_phrase})"
 
 
 def _build_resolution_point(

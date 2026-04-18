@@ -373,6 +373,109 @@ _TRASH_QUALITY_SET = {
 }
 _ALLOWED_POLARITY = {"positive", "negative", "neutral", "mixed", "trash"}
 _TOKEN_SPLIT_RE = re.compile(r"[\s,|;/]+")
+_INQUIRY_NOISE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"https?://",
+        r"\baffiliate\b",
+        r"\bsponsor(?:ed|ing)?\b",
+        r"\bpromo\s*code\b",
+        r"\bdiscount\s*code\b",
+        r"\bcoupon\b",
+        r"\bcoupang\s*partners?\b",
+        r"\bjoint\s*purchase\b",
+        r"\binvestment\b",
+        r"\bstock\w*\b",
+        r"\brestock\w*\b",
+        r"\bin\s+stock\b",
+        r"\bout\s+of\s+stock\b",
+        r"\bsubscribe\s*event\b",
+    ]
+)
+_NON_CUSTOMER_VOICE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"don't\s+even\s+have",
+        r"do\s+not\s+even\s+have",
+        r"just\s+good\s+content",
+        r"watching\s+for\s+fun",
+        r"not\s+using\s+this\s+product",
+        r"제품\s+없",
+        r"사용\s+안\s+해",
+        r"시청만",
+        r"\bnot\s+a\s+user\b",
+        r"\bnot\s+an?\s+owner\b",
+    ]
+)
+_REAL_INQUIRY_MARKERS = (
+    "어떻게",
+    "어디",
+    "왜",
+    "가능",
+    "문의",
+    "비교",
+    "추천",
+    "설치",
+    "고장",
+    "수리",
+    "환불",
+    "교체",
+    "어떤",
+    "얼마",
+    "몇",
+    "되나요",
+    "인가요",
+    "까요",
+    "how",
+    "why",
+    "where",
+    "which",
+    "can i",
+    "should i",
+    "does it",
+    "is it",
+    "repair",
+    "install",
+    "price",
+    "cost",
+)
+_REAL_DECISION_USAGE_MARKERS = (
+    "고장",
+    "수리",
+    "설치",
+    "교체",
+    "환불",
+    "비용",
+    "가격",
+    "비교",
+    "추천",
+    "사용",
+    "as",
+    "a/s",
+    "repair",
+    "install",
+    "replacement",
+    "warranty",
+    "price",
+    "cost",
+)
+_NON_INQUIRY_NARRATIVE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\bi used to\b",
+        r"\bi can still remember\b",
+        r"\bi noticed years ago\b",
+        r"\bi'd like to share\b",
+        r"\bthought i'd share\b",
+        r"\bgreat video\b",
+        r"\bthank(s| you)\b",
+        r"\btip\b",
+        r"\bstock\w*\b",
+        r"\brestock\w*\b",
+        r"\bin\s+stock\b",
+        r"\bout\s+of\s+stock\b",
+    ]
+)
 
 
 def _coerce_text(value: Any) -> str:
@@ -451,6 +554,42 @@ def _has_question_marker(text: str) -> bool:
         "does it",
     ]
     return any(marker.lower() in lowered for marker in inquiry_markers)
+
+
+def _is_noise_like_text(text: str) -> bool:
+    lowered = _coerce_text(text).lower()
+    if not lowered:
+        return False
+    return any(pattern.search(lowered) for pattern in _INQUIRY_NOISE_PATTERNS)
+
+
+def _is_real_inquiry_text(text: str) -> bool:
+    value = _coerce_text(text)
+    if not value:
+        return False
+    lowered = value.lower()
+    if _is_noise_like_text(value):
+        return False
+    has_question_mark = "?" in value
+    has_inquiry_marker = any(marker in lowered for marker in _REAL_INQUIRY_MARKERS)
+    if not (has_question_mark or has_inquiry_marker):
+        return False
+    if any(pattern.search(lowered) for pattern in _NON_INQUIRY_NARRATIVE_PATTERNS) and not has_question_mark:
+        return False
+    has_decision_usage_marker = any(marker in lowered for marker in _REAL_DECISION_USAGE_MARKERS)
+    if not has_decision_usage_marker and len(value) > 140:
+        return False
+    # Very long narratives without explicit inquiry intent are weak supporting inquiries.
+    if len(value) > 520 and not has_question_mark:
+        return False
+    return True
+
+
+def _is_non_customer_voice(text: str) -> bool:
+    lowered = _coerce_text(text).lower()
+    if not lowered:
+        return False
+    return any(pattern.search(lowered) for pattern in _NON_CUSTOMER_VOICE_PATTERNS)
 
 
 def _resolve_sentiment_final(row: pd.Series) -> tuple[str, bool]:
@@ -673,8 +812,9 @@ def build_canonical_comment_truth(comments_df: pd.DataFrame) -> pd.DataFrame:
     inquiry_flag = working.apply(
         lambda row: bool(
             _coerce_bool(row.get("nlp_is_inquiry"), default=False)
-            or _has_question_marker(_coerce_text(row.get("text_display")))
-            or _has_question_marker(_coerce_text(row.get("text_original")))
+            or _is_real_inquiry_text(_coerce_text(row.get("text_display")))
+            or _is_real_inquiry_text(_coerce_text(row.get("text_original")))
+            or _is_real_inquiry_text(_coerce_text(row.get("cleaned_text")))
         ),
         axis=1,
     )
@@ -708,7 +848,13 @@ def build_canonical_comment_truth(comments_df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    representative_eligibility = analysis_included & hygiene_class.eq("strategic") & journey_stage.notna()
+    non_customer_voice = fallback_text.map(_is_non_customer_voice)
+    representative_eligibility = (
+        analysis_included
+        & hygiene_class.eq("strategic")
+        & journey_stage.notna()
+        & ~non_customer_voice
+    )
 
     truth = pd.DataFrame(
         {
@@ -727,4 +873,3 @@ def build_canonical_comment_truth(comments_df: pd.DataFrame) -> pd.DataFrame:
         }
     )
     return truth[CANONICAL_COMMENT_TRUTH_COLUMNS].copy()
-
