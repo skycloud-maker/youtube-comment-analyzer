@@ -15,8 +15,8 @@ import streamlit as st
 
 from src import dashboard_app as legacy
 
-_ENTRY_SEARCH_KEY = "v2_entry_search_query"
 _FORCE_WIDE_SCOPE_KEY = "v2_force_wide_scope"
+_PENDING_RESET_FILTERS_KEY = "v2_pending_reset_filters"
 
 
 _JOURNEY_KO = {
@@ -520,27 +520,11 @@ def _reset_sidebar_filters(options: dict[str, list[str]]) -> None:
     st.session_state["filter_keyword_query"] = ""
     st.session_state["filter_keyword_mode"] = "AND"
     st.session_state["filter_keyword_mode_label"] = "AND(모두 포함)"
-    st.session_state[_ENTRY_SEARCH_KEY] = ""
     st.session_state[_FORCE_WIDE_SCOPE_KEY] = False
 
 
-def _render_data_controls(active_mode: str, active_snapshot_run: str) -> str:
+def _render_data_controls(active_mode: str, active_snapshot_run: str) -> None:
     with st.sidebar:
-        st.markdown("### 빠른 검색")
-        st.caption("제품/브랜드/모델/키워드를 바로 검색해 결과를 확인합니다.")
-        search_query = st.text_input(
-            "제품/브랜드/모델/키워드 검색",
-            value=_safe_text(st.session_state.get(_ENTRY_SEARCH_KEY, "")),
-            key=_ENTRY_SEARCH_KEY,
-            placeholder="예: 냄새, 미닉스, 세탁기, lg",
-            help="현재 화면의 전략 이슈를 빠르게 좁혀서 찾습니다.",
-        )
-        if st.button("검색 초기화", width="stretch", type="secondary", key="v2_clear_search"):
-            st.session_state[_ENTRY_SEARCH_KEY] = ""
-            search_query = ""
-            st.rerun()
-
-        st.markdown("---")
         st.markdown("### 결과 모드")
         st.caption(f"현재 모드: {'예시 모드' if active_mode == 'sample' else '실행 결과 모드'}")
         st.caption("결과가 보이지 않으면 `예시 보기`로 화면을 확인하세요.")
@@ -575,7 +559,12 @@ def _render_data_controls(active_mode: str, active_snapshot_run: str) -> str:
                 st.caption(f"현재 고정 실행 식별값: `{active_snapshot_run}`")
             st.caption("선택한 스냅샷은 로컬에 저장되어 다음 실행 시에도 자동 복원됩니다.")
 
-    return _safe_text(search_query).strip()
+
+def _apply_pending_filter_reset_if_needed(options: dict[str, list[str]]) -> None:
+    if not bool(st.session_state.get(_PENDING_RESET_FILTERS_KEY, False)):
+        return
+    _reset_sidebar_filters(options)
+    st.session_state[_PENDING_RESET_FILTERS_KEY] = False
 
 
 def _prepare_strategy_frame(frame: pd.DataFrame, level_type: str) -> pd.DataFrame:
@@ -867,7 +856,7 @@ def _load_context() -> DashboardContext | None:
         with st.spinner("최신 결과와 동기화 중..."):
             legacy._set_data_mode(active_mode, force_refresh=True, snapshot_run_id=active_snapshot_run)
 
-    search_query = _render_data_controls(active_mode, active_snapshot_run)
+    _render_data_controls(active_mode, active_snapshot_run)
     force_wide_scope = bool(st.session_state.get(_FORCE_WIDE_SCOPE_KEY, False))
 
     data = st.session_state.get(legacy.SESSION_DATA_BUNDLE_KEY, legacy._empty_dashboard_bundle())
@@ -896,7 +885,9 @@ def _load_context() -> DashboardContext | None:
         analysis_non_trash_raw = legacy.add_localized_columns(analysis_non_trash_raw)
 
     dashboard_options = legacy._build_dashboard_options(comments_df, videos_df)
+    _apply_pending_filter_reset_if_needed(dashboard_options)
     selected_filters = legacy._render_sidebar_filters(dashboard_options)
+    search_query = _safe_text(selected_filters.get("keyword_query", "")).strip()
     bundle = legacy.compute_filtered_bundle(
         comments_df,
         videos_df,
@@ -964,7 +955,7 @@ def _render_entry_recovery_panel(
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("필터 초기화", width="stretch", type="secondary", key="v2_recover_reset_filters"):
-            _reset_sidebar_filters(dashboard_options)
+            st.session_state[_PENDING_RESET_FILTERS_KEY] = True
             st.rerun()
     with c2:
         if st.button("예시 보기", width="stretch", type="secondary", key="v2_recover_sample_mode"):
