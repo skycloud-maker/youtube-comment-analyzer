@@ -6132,7 +6132,10 @@ def _build_dashboard_options(comments_df: pd.DataFrame, videos_df: pd.DataFrame)
     comment_products = [canonicalize_product_label(item) for item in comment_products_raw]
     video_products = [canonicalize_product_label(item) for item in video_products_raw]
     all_data_products = sorted({item for item in (comment_products + video_products) if item})
-    allowed_products = PRODUCT_ORDER + ["가전제품"]
+    # 제품 범위는 실제 제품군만 노출한다.
+    # 검색 키워드/일반 카테고리(예: 가전제품, 귀곰)가 제품 필터로 섞이지 않도록 차단한다.
+    disallowed_product_tokens = {"가전제품", "가전제품, 귀곰", "귀곰"}
+    allowed_products = [item for item in PRODUCT_ORDER if item not in disallowed_product_tokens]
     all_data_products = [item for item in all_data_products if item in allowed_products]
     available_products = [item for item in allowed_products if item in all_data_products]
     if not available_products:

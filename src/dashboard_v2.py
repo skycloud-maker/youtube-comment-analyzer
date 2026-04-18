@@ -16,7 +16,6 @@ import streamlit as st
 from src import dashboard_app as legacy
 
 _FORCE_WIDE_SCOPE_KEY = "v2_force_wide_scope"
-_PENDING_RESET_FILTERS_KEY = "v2_pending_reset_filters"
 
 
 _JOURNEY_KO = {
@@ -511,18 +510,6 @@ def _apply_entry_search(top_issues: pd.DataFrame, search_query: str) -> pd.DataF
     return top_issues[mask].reset_index(drop=True)
 
 
-def _reset_sidebar_filters(options: dict[str, list[str]]) -> None:
-    st.session_state["filter_products"] = list(options.get("products", []))
-    st.session_state["filter_regions"] = list(options.get("regions", []))
-    st.session_state["filter_brands"] = list(options.get("brands", []))
-    st.session_state["filter_sentiments"] = list(options.get("sentiments", []))
-    st.session_state["filter_cej"] = list(options.get("cej", []))
-    st.session_state["filter_keyword_query"] = ""
-    st.session_state["filter_keyword_mode"] = "AND"
-    st.session_state["filter_keyword_mode_label"] = "AND(모두 포함)"
-    st.session_state[_FORCE_WIDE_SCOPE_KEY] = False
-
-
 def _render_data_controls(active_mode: str, active_snapshot_run: str) -> None:
     with st.sidebar:
         st.markdown("### 결과 모드")
@@ -558,13 +545,6 @@ def _render_data_controls(active_mode: str, active_snapshot_run: str) -> None:
             if active_snapshot_run != legacy.RUN_SNAPSHOT_ALL:
                 st.caption(f"현재 고정 실행 식별값: `{active_snapshot_run}`")
             st.caption("선택한 스냅샷은 로컬에 저장되어 다음 실행 시에도 자동 복원됩니다.")
-
-
-def _apply_pending_filter_reset_if_needed(options: dict[str, list[str]]) -> None:
-    if not bool(st.session_state.get(_PENDING_RESET_FILTERS_KEY, False)):
-        return
-    _reset_sidebar_filters(options)
-    st.session_state[_PENDING_RESET_FILTERS_KEY] = False
 
 
 def _prepare_strategy_frame(frame: pd.DataFrame, level_type: str) -> pd.DataFrame:
@@ -885,7 +865,6 @@ def _load_context() -> DashboardContext | None:
         analysis_non_trash_raw = legacy.add_localized_columns(analysis_non_trash_raw)
 
     dashboard_options = legacy._build_dashboard_options(comments_df, videos_df)
-    _apply_pending_filter_reset_if_needed(dashboard_options)
     selected_filters = legacy._render_sidebar_filters(dashboard_options)
     search_query = _safe_text(selected_filters.get("keyword_query", "")).strip()
     bundle = legacy.compute_filtered_bundle(
@@ -946,28 +925,15 @@ def _render_entry_recovery_panel(
     *,
     has_fallback: bool,
     search_query: str,
-    dashboard_options: dict[str, list[str]],
 ) -> None:
     st.warning("현재 조건에서는 결과가 없습니다.")
-    st.caption("조건이 너무 좁거나 검색어가 과도하게 제한적일 수 있습니다. 아래에서 바로 복구할 수 있습니다.")
+    st.caption("조건이 너무 좁거나 검색어가 과도하게 제한적일 수 있습니다.")
     if search_query:
         st.caption(f"현재 검색어: `{search_query}`")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("필터 초기화", width="stretch", type="secondary", key="v2_recover_reset_filters"):
-            st.session_state[_PENDING_RESET_FILTERS_KEY] = True
-            st.rerun()
-    with c2:
-        if st.button("예시 보기", width="stretch", type="secondary", key="v2_recover_sample_mode"):
-            st.session_state[_FORCE_WIDE_SCOPE_KEY] = False
-            legacy._set_data_mode("sample", force_refresh=False)
-            st.rerun()
-    with c3:
-        if st.button("최근 주요 이슈 보기", width="stretch", type="primary", key="v2_recover_wide_scope"):
-            st.session_state[_FORCE_WIDE_SCOPE_KEY] = True
-            st.rerun()
-    if not has_fallback:
-        st.caption("최근 주요 이슈가 바로 없으면, 넓은 범위로 재시도해 복구 경로를 제공합니다.")
+    if has_fallback:
+        st.info("좌측 필터 메뉴에서 조건을 완화하거나 `실행 결과 새로고침`으로 최근 주요 이슈를 다시 확인하세요.")
+    else:
+        st.info("좌측 필터 메뉴에서 `필터 초기화 (전체 데이터 보기)` 또는 `예시 보기`로 화면을 복구하세요.")
 
 
 def main() -> None:
@@ -1002,7 +968,6 @@ def main() -> None:
         _render_entry_recovery_panel(
             has_fallback=not ctx.top_issues_fallback.empty,
             search_query=ctx.search_query,
-            dashboard_options=ctx.dashboard_options,
         )
         return
 
@@ -1014,7 +979,6 @@ def main() -> None:
         _render_entry_recovery_panel(
             has_fallback=not ctx.top_issues_fallback.empty,
             search_query=ctx.search_query,
-            dashboard_options=ctx.dashboard_options,
         )
         return
 
