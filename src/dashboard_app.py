@@ -150,6 +150,7 @@ SESSION_RUN_SNAPSHOT_KEY = "dashboard_run_snapshot"
 RUN_SNAPSHOT_ALL = "__ALL_RUNS__"
 STATE_SNAPSHOT_DIR = CACHE_DIR / "saved_states"
 STATE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+UI_STATE_FILE_VERSION = "dashboard_ui_state.v1"
 ANALYSIS_ALL_MARKET_CODE = "ALL"
 ANALYSIS_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
     ("전체(20개국)", ANALYSIS_ALL_MARKET_CODE),
@@ -442,14 +443,102 @@ def _list_saved_ui_states() -> list[tuple[str, str]]:
     return items
 
 
+def _validate_ui_state_payload(payload: Any) -> tuple[bool, str]:
+    if not isinstance(payload, dict):
+        return False, "상태 파일 형식이 올바르지 않습니다. (ui_state 객체 누락)"
+
+    mode = _safe_text(payload.get("mode", "")).lower()
+    if mode not in {"sample", "real"}:
+        return False, "상태 파일의 데이터 모드가 올바르지 않습니다."
+
+    snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
+    if not snapshot_run:
+        return False, "상태 파일의 스냅샷 정보가 올바르지 않습니다."
+
+    filters = payload.get("filters")
+    if not isinstance(filters, dict):
+        return False, "상태 파일의 필터 정보가 누락되었습니다."
+
+    required_keys = [
+        "filter_products",
+        "filter_regions",
+        "filter_brands",
+        "filter_sentiments",
+        "filter_cej",
+        "filter_keyword_query",
+        "filter_keyword_mode",
+        "filter_analysis_scope",
+        "filter_relevance_scope",
+    ]
+    missing_keys = [key for key in required_keys if key not in filters]
+    if missing_keys:
+        return False, f"상태 파일의 필수 필드가 누락되었습니다: {', '.join(missing_keys)}"
+
+    for key in ["filter_products", "filter_regions", "filter_brands", "filter_sentiments", "filter_cej"]:
+        if not isinstance(filters.get(key), list):
+            return False, f"상태 파일의 `{key}` 형식이 올바르지 않습니다."
+
+    keyword_mode = _safe_text(filters.get("filter_keyword_mode", "AND")).upper()
+    if keyword_mode not in {"AND", "OR"}:
+        return False, "상태 파일의 키워드 결합 규칙이 올바르지 않습니다."
+
+    return True, ""
+
+
+def _build_ui_state_document(label: str, payload: dict[str, Any]) -> dict[str, Any]:
+    mode = _safe_text(payload.get("mode", "real")).lower()
+    snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
+    return {
+        "version": UI_STATE_FILE_VERSION,
+        "saved_at": pd.Timestamp.utcnow().isoformat(),
+        "label": _safe_text(label) or "saved_state",
+        "data_mode": mode if mode in {"sample", "real"} else "real",
+        "snapshot_run_id": snapshot_run,
+        "ui_state": payload,
+    }
+
+
+def _extract_ui_state_payload(doc: Any) -> tuple[bool, dict[str, Any], str]:
+    if not isinstance(doc, dict):
+        return False, {}, "상태 파일이 JSON 객체 형식이 아닙니다."
+
+    version = _safe_text(doc.get("version", "")).strip()
+    if version and version != UI_STATE_FILE_VERSION:
+        return False, {}, f"지원하지 않는 상태 파일 버전입니다: {version}"
+
+    payload = doc.get("ui_state")
+    if not isinstance(payload, dict):
+        # Backward compatibility for old internal save format.
+        payload = doc.get("payload")
+    if not isinstance(payload, dict):
+        return False, {}, "상태 파일에 `ui_state`가 없습니다."
+
+    ok, message = _validate_ui_state_payload(payload)
+    if not ok:
+        return False, {}, message
+    return True, payload, ""
+
+
+def _read_uploaded_ui_state(uploaded_file: Any) -> tuple[bool, dict[str, Any], str]:
+    if uploaded_file is None:
+        return False, {}, "업로드된 파일이 없습니다."
+    try:
+        raw = uploaded_file.getvalue()
+        text = raw.decode("utf-8-sig")
+        doc = json.loads(text)
+    except UnicodeDecodeError:
+        return False, {}, "상태 파일 인코딩이 올바르지 않습니다. UTF-8 JSON 파일만 지원합니다."
+    except json.JSONDecodeError:
+        return False, {}, "유효한 JSON 파일이 아닙니다."
+    except Exception as exc:
+        return False, {}, f"상태 파일을 읽지 못했습니다: {exc}"
+    return _extract_ui_state_payload(doc)
+
+
 def _write_saved_ui_state(label: str, payload: dict[str, Any]) -> tuple[bool, str]:
     filename = _safe_snapshot_filename(label)
     target = STATE_SNAPSHOT_DIR / f"{filename}.json"
-    doc = {
-        "label": _safe_text(label) or filename,
-        "saved_at": pd.Timestamp.utcnow().isoformat(),
-        "payload": payload,
-    }
+    doc = _build_ui_state_document(label or filename, payload)
     try:
         target.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
@@ -465,8 +554,9 @@ def _read_saved_ui_state(file_name: str) -> dict[str, Any]:
     if not target.exists():
         return {}
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-        return payload.get("payload", {}) if isinstance(payload, dict) else {}
+        doc = json.loads(target.read_text(encoding="utf-8"))
+        ok, payload, _ = _extract_ui_state_payload(doc)
+        return payload if ok else {}
     except Exception:
         return {}
 
@@ -6583,6 +6673,41 @@ def main() -> None:
                         st.rerun()
             else:
                 st.caption("저장된 상태가 없습니다.")
+
+            st.markdown("---")
+            st.caption("현재 상태를 로컬 JSON 파일로 내보내거나, 저장해 둔 상태 파일을 업로드해 복원할 수 있습니다.")
+            export_mode = _safe_text(st.session_state.get(SESSION_DATA_MODE_KEY, active_mode)) or "real"
+            export_snapshot = _safe_text(st.session_state.get(SESSION_RUN_SNAPSHOT_KEY, active_snapshot_run)) or RUN_SNAPSHOT_ALL
+            export_payload = _collect_current_ui_state(export_mode, export_snapshot)
+            export_doc = _build_ui_state_document(save_label or "saved_state", export_payload)
+            export_json = json.dumps(export_doc, ensure_ascii=False, indent=2)
+            export_suffix = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+            export_file_name = f"{_safe_snapshot_filename(save_label or 'saved_state')}_{export_suffix}.json"
+            st.download_button(
+                "파일로 다운로드",
+                data=export_json,
+                file_name=export_file_name,
+                mime="application/json",
+                width="stretch",
+                help="현재 대시보드 상태를 JSON 파일로 저장합니다.",
+            )
+
+            uploaded_state_file = st.file_uploader(
+                "상태 파일 업로드(JSON)",
+                type=["json"],
+                key="ui_state_upload_file",
+                help="다운로드한 상태 JSON 파일을 업로드하면 같은 대시보드 상태를 복원합니다.",
+            )
+            if uploaded_state_file is not None:
+                st.caption(f"업로드 파일: {uploaded_state_file.name}")
+                if st.button("업로드 상태 적용", width="stretch", type="secondary"):
+                    ok, payload, message = _read_uploaded_ui_state(uploaded_state_file)
+                    if not ok:
+                        st.error(message)
+                    else:
+                        _apply_saved_ui_state(payload)
+                        st.success("업로드한 상태를 불러왔습니다.")
+                        st.rerun()
 
         with st.expander("실제 분석 실행", expanded=False):
             run_keyword = st.text_input("검색 키워드", value="가전 리뷰")
