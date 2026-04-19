@@ -2562,10 +2562,34 @@ def filter_issue_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def to_excel_bytes(dataframes: dict[str, pd.DataFrame]) -> bytes:
+    def _excel_safe_value(value: Any) -> Any:
+        """Convert timezone-aware datetime values to timezone-naive for Excel."""
+        if isinstance(value, pd.Timestamp):
+            if value.tzinfo is not None:
+                return value.tz_localize(None)
+            return value
+        if hasattr(value, "tzinfo") and getattr(value, "tzinfo", None) is not None and hasattr(value, "replace"):
+            try:
+                return value.replace(tzinfo=None)
+            except Exception:
+                return value
+        return value
+
+    def _prepare_excel_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        prepared = frame.copy()
+        for col in prepared.columns:
+            series = prepared[col]
+            if pd.api.types.is_datetime64tz_dtype(series.dtype):
+                prepared[col] = series.dt.tz_localize(None)
+                continue
+            if pd.api.types.is_object_dtype(series.dtype):
+                prepared[col] = series.map(_excel_safe_value)
+        return prepared
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for name, frame in dataframes.items():
-            frame.copy().to_excel(writer, sheet_name=name[:31], index=False)
+            _prepare_excel_frame(frame).to_excel(writer, sheet_name=name[:31], index=False)
     return output.getvalue()
 
 
