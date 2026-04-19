@@ -535,6 +535,36 @@ def _read_uploaded_ui_state(uploaded_file: Any) -> tuple[bool, dict[str, Any], s
     return _extract_ui_state_payload(doc)
 
 
+def _validate_restore_data_availability(payload: dict[str, Any]) -> tuple[bool, str]:
+    mode = _safe_text(payload.get("mode", "real")).lower()
+    snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
+
+    if mode == "sample":
+        # Sample bundle is always available via synthetic fallback.
+        return True, ""
+
+    ready_runs = _real_ready_run_dirs()
+    if not ready_runs:
+        return (
+            False,
+            "이 상태 파일은 화면 설정만 포함하며, 현재 환경에 필요한 실데이터가 없습니다.\n"
+            "먼저 분석 실행 또는 샘플 로드를 해주세요.\n"
+            "현재 파일만으로는 원본 댓글/영상 데이터를 복원할 수 없습니다.",
+        )
+
+    if snapshot_run != RUN_SNAPSHOT_ALL:
+        ready_run_ids = {run_dir.name for run_dir in ready_runs}
+        if snapshot_run not in ready_run_ids:
+            return (
+                False,
+                f"요청한 스냅샷(run_id=`{snapshot_run}`)이 현재 환경에 없습니다.\n"
+                "먼저 해당 run 결과를 다시 생성하거나, 다른 저장 상태를 선택해 주세요.\n"
+                "현재 파일만으로는 원본 댓글/영상 데이터를 복원할 수 없습니다.",
+            )
+
+    return True, ""
+
+
 def _write_saved_ui_state(label: str, payload: dict[str, Any]) -> tuple[bool, str]:
     filename = _safe_snapshot_filename(label)
     target = STATE_SNAPSHOT_DIR / f"{filename}.json"
@@ -6668,9 +6698,13 @@ def main() -> None:
                     if not payload:
                         st.error("불러올 상태를 찾지 못했습니다.")
                     else:
-                        _apply_saved_ui_state(payload)
-                        st.success("저장 상태를 불러왔습니다.")
-                        st.rerun()
+                        can_restore, restore_message = _validate_restore_data_availability(payload)
+                        if not can_restore:
+                            st.warning(restore_message)
+                        else:
+                            _apply_saved_ui_state(payload)
+                            st.success("저장 상태를 불러왔습니다.")
+                            st.rerun()
             else:
                 st.caption("저장된 상태가 없습니다.")
 
@@ -6705,9 +6739,13 @@ def main() -> None:
                     if not ok:
                         st.error(message)
                     else:
-                        _apply_saved_ui_state(payload)
-                        st.success("업로드한 상태를 불러왔습니다.")
-                        st.rerun()
+                        can_restore, restore_message = _validate_restore_data_availability(payload)
+                        if not can_restore:
+                            st.warning(restore_message)
+                        else:
+                            _apply_saved_ui_state(payload)
+                            st.success("업로드한 상태를 불러왔습니다.")
+                            st.rerun()
 
         with st.expander("실제 분석 실행", expanded=False):
             run_keyword = st.text_input("검색 키워드", value="가전 리뷰")
