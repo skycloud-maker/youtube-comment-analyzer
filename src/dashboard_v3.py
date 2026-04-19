@@ -21,6 +21,7 @@ from src import dashboard_v2 as strategy_v2
 
 _ENTRY_SEARCH_KEY = "v3_entry_search_query"
 _PENDING_FILTER_RESET_KEY = "v3_pending_filter_reset"
+_PENDING_ENTRY_SEARCH_CLEAR_KEY = "v3_pending_entry_search_clear"
 _FORCE_WIDE_SCOPE_KEY = "v3_force_wide_scope"
 
 
@@ -277,6 +278,10 @@ def _aligned_comment_pool(comments_df: pd.DataFrame, issue_row: pd.Series) -> pd
 
 
 def _apply_pending_filter_reset_if_needed(options: dict[str, list[str]]) -> None:
+    if bool(st.session_state.get(_PENDING_ENTRY_SEARCH_CLEAR_KEY, False)):
+        st.session_state.pop(_ENTRY_SEARCH_KEY, None)
+        st.session_state[_PENDING_ENTRY_SEARCH_CLEAR_KEY] = False
+
     if not bool(st.session_state.get(_PENDING_FILTER_RESET_KEY, False)):
         return
     st.session_state["filter_products"] = list(options.get("products", []))
@@ -637,7 +642,7 @@ def _render_recovery_panel(*, has_fallback: bool, quick_search_query: str, selec
     with c1:
         if st.button("필터 초기화", width="stretch", type="secondary", key="v3_recover_reset"):
             st.session_state[_PENDING_FILTER_RESET_KEY] = True
-            st.session_state[_ENTRY_SEARCH_KEY] = ""
+            st.session_state[_PENDING_ENTRY_SEARCH_CLEAR_KEY] = True
             st.rerun()
     with c2:
         if st.button("예시 보기", width="stretch", type="secondary", key="v3_recover_sample"):
