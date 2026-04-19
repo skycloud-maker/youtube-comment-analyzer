@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from io import BytesIO
+from io import BytesIO, StringIO
 import codecs
 from collections import Counter
 import hashlib
@@ -151,6 +151,16 @@ RUN_SNAPSHOT_ALL = "__ALL_RUNS__"
 STATE_SNAPSHOT_DIR = CACHE_DIR / "saved_states"
 STATE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 UI_STATE_FILE_VERSION = "dashboard_ui_state.v1"
+UI_STATE_FILE_VERSION_EMBEDDED = "dashboard_ui_state.v1+embedded"
+UI_STATE_EMBEDDED_SCHEMA = "bundle-split-v1"
+UI_STATE_EMBEDDED_DEFAULT_LIMIT = 50000
+UI_STATE_EMBEDDED_ROW_LIMITS: dict[str, int] = {
+    "comments": 50000,
+    "analysis_comments": 50000,
+    "analysis_non_trash": 50000,
+    "opinion_units": 80000,
+    "videos": 8000,
+}
 ANALYSIS_ALL_MARKET_CODE = "ALL"
 ANALYSIS_MARKET_OPTIONS: tuple[tuple[str, str], ...] = (
     ("전체(20개국)", ANALYSIS_ALL_MARKET_CODE),
@@ -485,10 +495,68 @@ def _validate_ui_state_payload(payload: Any) -> tuple[bool, str]:
     return True, ""
 
 
-def _build_ui_state_document(label: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _bundle_row_limit(dataset_key: str) -> int:
+    return int(UI_STATE_EMBEDDED_ROW_LIMITS.get(dataset_key, UI_STATE_EMBEDDED_DEFAULT_LIMIT))
+
+
+def _serialize_state_bundle(bundle: dict[str, pd.DataFrame]) -> tuple[dict[str, Any], dict[str, int]]:
+    datasets: dict[str, Any] = {}
+    exported_rows: dict[str, int] = {}
+    for key, _ in DASHBOARD_DATASETS:
+        frame = bundle.get(key, pd.DataFrame())
+        if frame is None or frame.empty:
+            continue
+        limit = _bundle_row_limit(key)
+        sliced = frame.head(limit).copy()
+        try:
+            split_obj = json.loads(sliced.to_json(orient="split", date_format="iso", force_ascii=False))
+        except Exception:
+            continue
+        datasets[key] = split_obj
+        exported_rows[key] = int(len(sliced))
+    return datasets, exported_rows
+
+
+def _deserialize_state_bundle(doc: Any) -> tuple[dict[str, pd.DataFrame], str]:
+    if not isinstance(doc, dict):
+        return {}, "임베디드 데이터 형식이 올바르지 않습니다."
+    schema = _safe_text(doc.get("schema", "")).strip()
+    if schema and schema != UI_STATE_EMBEDDED_SCHEMA:
+        return {}, f"지원하지 않는 임베디드 데이터 스키마입니다: {schema}"
+    datasets_obj = doc.get("datasets")
+    if not isinstance(datasets_obj, dict):
+        return {}, "임베디드 데이터셋 구조가 올바르지 않습니다."
+
+    bundle = _empty_dashboard_bundle()
+    for key, _ in DASHBOARD_DATASETS:
+        obj = datasets_obj.get(key)
+        if not isinstance(obj, dict):
+            continue
+        try:
+            frame = pd.read_json(StringIO(json.dumps(obj, ensure_ascii=False)), orient="split")
+            bundle[key] = frame
+        except Exception:
+            return {}, f"임베디드 데이터셋 복원 실패: {key}"
+    return bundle, ""
+
+
+def _has_usable_embedded_bundle(bundle: dict[str, pd.DataFrame] | None) -> bool:
+    if not bundle:
+        return False
+    comments = bundle.get("comments", pd.DataFrame())
+    videos = bundle.get("videos", pd.DataFrame())
+    return not comments.empty and not videos.empty
+
+
+def _build_ui_state_document(
+    label: str,
+    payload: dict[str, Any],
+    *,
+    embedded_bundle: dict[str, pd.DataFrame] | None = None,
+) -> dict[str, Any]:
     mode = _safe_text(payload.get("mode", "real")).lower()
     snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
-    return {
+    doc: dict[str, Any] = {
         "version": UI_STATE_FILE_VERSION,
         "saved_at": pd.Timestamp.utcnow().isoformat(),
         "label": _safe_text(label) or "saved_state",
@@ -496,51 +564,80 @@ def _build_ui_state_document(label: str, payload: dict[str, Any]) -> dict[str, A
         "snapshot_run_id": snapshot_run,
         "ui_state": payload,
     }
+    if embedded_bundle:
+        datasets_obj, exported_rows = _serialize_state_bundle(embedded_bundle)
+        if datasets_obj:
+            doc["version"] = UI_STATE_FILE_VERSION_EMBEDDED
+            doc["embedded_data"] = {
+                "schema": UI_STATE_EMBEDDED_SCHEMA,
+                "datasets": datasets_obj,
+                "row_counts": exported_rows,
+            }
+    return doc
 
 
-def _extract_ui_state_payload(doc: Any) -> tuple[bool, dict[str, Any], str]:
+def _extract_ui_state_document(doc: Any) -> tuple[bool, dict[str, Any], dict[str, pd.DataFrame] | None, str]:
     if not isinstance(doc, dict):
-        return False, {}, "상태 파일이 JSON 객체 형식이 아닙니다."
+        return False, {}, None, "상태 파일이 JSON 객체 형식이 아닙니다."
 
     version = _safe_text(doc.get("version", "")).strip()
-    if version and version != UI_STATE_FILE_VERSION:
-        return False, {}, f"지원하지 않는 상태 파일 버전입니다: {version}"
+    allowed_versions = {UI_STATE_FILE_VERSION, UI_STATE_FILE_VERSION_EMBEDDED}
+    if version and version not in allowed_versions:
+        return False, {}, None, f"지원하지 않는 상태 파일 버전입니다: {version}"
 
     payload = doc.get("ui_state")
     if not isinstance(payload, dict):
         # Backward compatibility for old internal save format.
         payload = doc.get("payload")
     if not isinstance(payload, dict):
-        return False, {}, "상태 파일에 `ui_state`가 없습니다."
+        return False, {}, None, "상태 파일에 `ui_state`가 없습니다."
 
     ok, message = _validate_ui_state_payload(payload)
     if not ok:
-        return False, {}, message
-    return True, payload, ""
+        return False, {}, None, message
+
+    embedded_bundle: dict[str, pd.DataFrame] | None = None
+    if isinstance(doc.get("embedded_data"), dict):
+        embedded_bundle, embedded_error = _deserialize_state_bundle(doc.get("embedded_data"))
+        if embedded_error:
+            return False, {}, None, embedded_error
+    return True, payload, embedded_bundle, ""
 
 
-def _read_uploaded_ui_state(uploaded_file: Any) -> tuple[bool, dict[str, Any], str]:
+def _extract_ui_state_payload(doc: Any) -> tuple[bool, dict[str, Any], str]:
+    ok, payload, _, message = _extract_ui_state_document(doc)
+    return ok, payload, message
+
+
+def _read_uploaded_ui_state(uploaded_file: Any) -> tuple[bool, dict[str, Any], dict[str, pd.DataFrame] | None, str]:
     if uploaded_file is None:
-        return False, {}, "업로드된 파일이 없습니다."
+        return False, {}, None, "업로드된 파일이 없습니다."
     try:
         raw = uploaded_file.getvalue()
         text = raw.decode("utf-8-sig")
         doc = json.loads(text)
     except UnicodeDecodeError:
-        return False, {}, "상태 파일 인코딩이 올바르지 않습니다. UTF-8 JSON 파일만 지원합니다."
+        return False, {}, None, "상태 파일 인코딩이 올바르지 않습니다. UTF-8 JSON 파일만 지원합니다."
     except json.JSONDecodeError:
-        return False, {}, "유효한 JSON 파일이 아닙니다."
+        return False, {}, None, "유효한 JSON 파일이 아닙니다."
     except Exception as exc:
-        return False, {}, f"상태 파일을 읽지 못했습니다: {exc}"
-    return _extract_ui_state_payload(doc)
+        return False, {}, None, f"상태 파일을 읽지 못했습니다: {exc}"
+    return _extract_ui_state_document(doc)
 
 
-def _validate_restore_data_availability(payload: dict[str, Any]) -> tuple[bool, str]:
+def _validate_restore_data_availability(
+    payload: dict[str, Any],
+    *,
+    embedded_bundle: dict[str, pd.DataFrame] | None = None,
+) -> tuple[bool, str]:
     mode = _safe_text(payload.get("mode", "real")).lower()
     snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
 
     if mode == "sample":
         # Sample bundle is always available via synthetic fallback.
+        return True, ""
+
+    if _has_usable_embedded_bundle(embedded_bundle):
         return True, ""
 
     ready_runs = _real_ready_run_dirs()
@@ -609,7 +706,7 @@ def _collect_current_ui_state(active_mode: str, active_snapshot_run: str) -> dic
     }
 
 
-def _apply_saved_ui_state(payload: dict[str, Any]) -> None:
+def _apply_saved_ui_state(payload: dict[str, Any], *, embedded_bundle: dict[str, pd.DataFrame] | None = None) -> None:
     if not isinstance(payload, dict):
         return
     filter_payload = payload.get("filters", {}) if isinstance(payload.get("filters"), dict) else {}
@@ -633,6 +730,17 @@ def _apply_saved_ui_state(payload: dict[str, Any]) -> None:
     snapshot_run = _safe_text(payload.get("snapshot_run", RUN_SNAPSHOT_ALL)) or RUN_SNAPSHOT_ALL
     if mode == "sample":
         _set_data_mode("sample", force_refresh=False, snapshot_run_id=RUN_SNAPSHOT_ALL)
+    elif _has_usable_embedded_bundle(embedded_bundle) and not _real_ready_run_dirs():
+        st.session_state[SESSION_DATA_MODE_KEY] = "real"
+        st.session_state[SESSION_RUN_SNAPSHOT_KEY] = RUN_SNAPSHOT_ALL
+        st.session_state[SESSION_DATA_BUNDLE_KEY] = embedded_bundle
+        st.session_state[SESSION_DATA_SIGNATURE_KEY] = _expected_mode_signature("real", snapshot_run_id=RUN_SNAPSHOT_ALL)
+        try:
+            st.query_params["data_mode"] = "real"
+            if "run_snapshot" in st.query_params:
+                del st.query_params["run_snapshot"]
+        except Exception:
+            pass
     else:
         _set_data_mode("real", force_refresh=False, snapshot_run_id=snapshot_run)
 
@@ -6698,11 +6806,11 @@ def main() -> None:
                     if not payload:
                         st.error("불러올 상태를 찾지 못했습니다.")
                     else:
-                        can_restore, restore_message = _validate_restore_data_availability(payload)
+                        can_restore, restore_message = _validate_restore_data_availability(payload, embedded_bundle=None)
                         if not can_restore:
                             st.warning(restore_message)
                         else:
-                            _apply_saved_ui_state(payload)
+                            _apply_saved_ui_state(payload, embedded_bundle=None)
                             st.success("저장 상태를 불러왔습니다.")
                             st.rerun()
             else:
@@ -6713,7 +6821,12 @@ def main() -> None:
             export_mode = _safe_text(st.session_state.get(SESSION_DATA_MODE_KEY, active_mode)) or "real"
             export_snapshot = _safe_text(st.session_state.get(SESSION_RUN_SNAPSHOT_KEY, active_snapshot_run)) or RUN_SNAPSHOT_ALL
             export_payload = _collect_current_ui_state(export_mode, export_snapshot)
-            export_doc = _build_ui_state_document(save_label or "saved_state", export_payload)
+            export_bundle = st.session_state.get(SESSION_DATA_BUNDLE_KEY, _empty_dashboard_bundle())
+            export_doc = _build_ui_state_document(
+                save_label or "saved_state",
+                export_payload,
+                embedded_bundle=export_bundle,
+            )
             export_json = json.dumps(export_doc, ensure_ascii=False, indent=2)
             export_suffix = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
             export_file_name = f"{_safe_snapshot_filename(save_label or 'saved_state')}_{export_suffix}.json"
@@ -6735,15 +6848,18 @@ def main() -> None:
             if uploaded_state_file is not None:
                 st.caption(f"업로드 파일: {uploaded_state_file.name}")
                 if st.button("업로드 상태 적용", width="stretch", type="secondary"):
-                    ok, payload, message = _read_uploaded_ui_state(uploaded_state_file)
+                    ok, payload, embedded_bundle, message = _read_uploaded_ui_state(uploaded_state_file)
                     if not ok:
                         st.error(message)
                     else:
-                        can_restore, restore_message = _validate_restore_data_availability(payload)
+                        can_restore, restore_message = _validate_restore_data_availability(
+                            payload,
+                            embedded_bundle=embedded_bundle,
+                        )
                         if not can_restore:
                             st.warning(restore_message)
                         else:
-                            _apply_saved_ui_state(payload)
+                            _apply_saved_ui_state(payload, embedded_bundle=embedded_bundle)
                             st.success("업로드한 상태를 불러왔습니다.")
                             st.rerun()
 
