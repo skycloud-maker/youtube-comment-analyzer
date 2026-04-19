@@ -9,6 +9,7 @@ Policy for this phase:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,51 @@ class V3Context:
 
 def _safe_text(value: Any) -> str:
     return legacy._safe_text(value)
+
+
+def _parse_list_like(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_safe_text(v) for v in value if _safe_text(v)]
+    if isinstance(value, tuple):
+        return [_safe_text(v) for v in value if _safe_text(v)]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [_safe_text(v) for v in parsed if _safe_text(v)]
+            except Exception:
+                pass
+        return [_safe_text(v) for v in raw.replace("|", ",").split(",") if _safe_text(v)]
+    return []
+
+
+def _clip_text(text: str, max_len: int = 180) -> str:
+    raw = _safe_text(text).replace("\n", " ").strip()
+    if len(raw) <= max_len:
+        return raw
+    return f"{raw[:max_len].rstrip()}..."
+
+
+def _sentiment_ko(value: Any) -> str:
+    mapping = {"positive": "긍정", "negative": "부정", "mixed": "혼합", "neutral": "중립"}
+    return mapping.get(_safe_text(value).lower(), _safe_text(value) or "중립")
+
+
+def _extract_comment_text(row: pd.Series) -> str:
+    for col in ("text_display", legacy.COL_ORIGINAL, "cleaned_text", "text_original"):
+        if col in row:
+            text = _safe_text(row.get(col))
+            if text:
+                return text
+    return ""
+
+
+def _issue_ratio_pct(issue_row: pd.Series) -> float:
+    return float(pd.to_numeric(issue_row.get("issue_ratio", 0.0), errors="coerce") or 0.0) * 100.0
 
 
 def _sanitize_filter_options(options: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -415,6 +461,149 @@ def _render_recovery_panel(*, has_fallback: bool, quick_search_query: str, selec
         st.caption("넓은 스코프에서도 전략 이슈가 부족합니다. 예시 보기로 화면 검증이 가능합니다.")
 
 
+def _render_v3_primary_issue(issue_row: pd.Series | None, issue_comments: pd.DataFrame) -> None:
+    st.subheader("1) 🔥 주요 1순위 이슈")
+    if issue_row is None:
+        st.info("현재 조건에서는 표시할 전략 이슈가 없습니다.")
+        return
+
+    title = _safe_text(issue_row.get("insight_title")) or "핵심 전략 이슈"
+    stage = _safe_text(issue_row.get("journey_stage_label")) or _safe_text(issue_row.get("journey_stage")) or "여정 미분류"
+    axes = _safe_text(issue_row.get("judgment_axis_label")) or ", ".join(_parse_list_like(issue_row.get("judgment_axes"))) or "판단축 미분류"
+    sentiment = _safe_text(issue_row.get("sentiment_label")) or _sentiment_ko(issue_row.get("polarity_direction"))
+    action = _safe_text(issue_row.get("action_summary")) or f"{stage} 단계 이슈 대응을 우선 과제로 설정해야 합니다."
+    action_label = _safe_text(issue_row.get("action_label_ko")) or _safe_text(issue_row.get("action_label")) or "모니터링"
+    priority = _safe_text(issue_row.get("priority_level")) or "Low"
+    impact = _safe_text(issue_row.get("impact_level")) or "Low"
+    issue_ratio = _issue_ratio_pct(issue_row)
+    cluster_size = int(pd.to_numeric(issue_row.get("supporting_cluster_count", 0), errors="coerce") or 0)
+    insufficient = bool(issue_row.get("insufficient_evidence", False))
+
+    st.markdown(f"### {title}")
+    st.markdown("#### 👉 지금 해야 할 것")
+    st.success(action)
+
+    st.markdown("#### 📌 왜 중요한가")
+    st.info(
+        f"{stage} 구간에서 {sentiment} 반응이 반복되고 있으며, "
+        f"영향 범위와 반복 강도를 함께 볼 때 우선 대응이 필요한 사안입니다. "
+        f"(이슈 비중 {issue_ratio:.1f}%, 반복 근거 {cluster_size:,}건)"
+    )
+
+    st.markdown("#### 📊 핵심 판단 근거")
+    st.markdown(
+        f"- 현재 핵심 맥락은 **{stage} / {axes}** 입니다.\n"
+        f"- 감성 방향은 **{sentiment}** 이며 우선순위/영향도는 **{priority}/{impact}** 입니다.\n"
+        f"- 동일 성격 반응이 누적되어 일회성 이슈가 아니라 반복 이슈로 해석됩니다."
+    )
+
+    st.markdown("#### 🧭 실행 방향")
+    st.write(f"권장 조치 유형은 **{action_label}** 입니다.")
+
+    st.markdown("#### 📍 신뢰도")
+    if insufficient or cluster_size < 3:
+        st.warning("근거 부족: 추가 반응 축적 후 우선순위 확정이 필요합니다.")
+    elif cluster_size >= 120:
+        st.success("충분한 근거: 반복 규모가 커서 우선 실행 판단이 가능합니다.")
+    else:
+        st.success("충분한 근거: 현재 근거 수준에서 실행 판단이 가능합니다.")
+
+
+def _render_v3_secondary_issues(top_issues: pd.DataFrame, primary_issue_key: str) -> None:
+    st.subheader("2) 🧩 함께 고려할 이슈")
+    secondary = top_issues[top_issues["issue_key"].astype(str).ne(_safe_text(primary_issue_key))].copy()
+    if secondary.empty:
+        st.caption("현재 함께 고려할 보조 이슈가 없습니다.")
+        return
+
+    with st.expander("보조 이슈 Top 5", expanded=False):
+        for idx, (_, row) in enumerate(secondary.head(5).iterrows(), start=1):
+            title = _safe_text(row.get("insight_title")) or "보조 이슈"
+            action = _safe_text(row.get("action_label_ko")) or _safe_text(row.get("action_label")) or "모니터링"
+            stage = _safe_text(row.get("journey_stage_label")) or _safe_text(row.get("journey_stage")) or "미분류"
+            st.markdown(f"**{idx}. {title}**")
+            st.caption(f"{stage} 구간에서 `{action}` 방향 대응이 필요합니다.")
+
+
+def _render_v3_evidence(
+    issue_row: pd.Series | None,
+    issue_comments: pd.DataFrame,
+    representative_comments: pd.DataFrame,
+) -> None:
+    st.subheader("3) 🔎 이 판단의 근거")
+    if issue_row is None:
+        st.info("현재 조건에서는 연결 가능한 근거가 없습니다.")
+        return
+
+    with st.expander("근거 보기", expanded=False):
+        total_issue_comments = int(len(issue_comments))
+        if total_issue_comments > 0:
+            st.caption(
+                f"동일 맥락 반응이 반복 확인되고 있어, 단일 댓글이 아닌 집계된 근거로 판단했습니다. "
+                f"(연결 반응 {total_issue_comments:,}건)"
+            )
+        else:
+            st.caption("현재 필터 조건에서는 연결 반응이 적어 대표 근거 중심으로 제공합니다.")
+
+        st.markdown("#### 대표 근거 댓글")
+        rep_pool = representative_comments.copy()
+        rep_ids = _parse_list_like(issue_row.get("supporting_representatives", []))
+        if not rep_pool.empty and "comment_id" in rep_pool.columns and rep_ids:
+            rep_pool = rep_pool[rep_pool["comment_id"].astype(str).isin(rep_ids)].copy()
+        if rep_pool.empty:
+            rep_pool = issue_comments.copy()
+
+        if rep_pool.empty:
+            st.caption("대표 근거 댓글이 없습니다.")
+        else:
+            sort_cols = [col for col in ("like_count", legacy.COL_LIKES, "published_at") if col in rep_pool.columns]
+            if sort_cols:
+                rep_pool = rep_pool.sort_values(sort_cols, ascending=[False] * len(sort_cols), na_position="last")
+            for idx, (_, row) in enumerate(rep_pool.head(3).iterrows(), start=1):
+                sentiment = _sentiment_ko(row.get("sentiment_final", row.get("sentiment_label", "neutral")))
+                text = _clip_text(_extract_comment_text(row), 220)
+                st.markdown(f"{idx}. ({sentiment}) {text}")
+
+        st.markdown("#### 반복 근거 요약")
+        if total_issue_comments >= 3:
+            st.write(
+                f"이 이슈는 동일 여정/판단축 맥락에서 반복적으로 확인되고 있습니다. "
+                f"일시적 반응이 아니라 관리 대상 신호입니다. (반복 확인 {total_issue_comments:,}건)"
+            )
+        elif total_issue_comments > 0:
+            st.write("현재는 초기 신호 수준으로 관찰되며, 추가 반복 확인이 필요합니다.")
+        else:
+            st.write("현재 조건에서는 반복 근거를 확정하기 어렵습니다.")
+
+        st.markdown("#### 원천 댓글 (참고)")
+        with st.expander("원천 댓글 상세 보기", expanded=False):
+            if issue_comments.empty:
+                st.caption("표시할 원천 댓글이 없습니다.")
+            else:
+                raw_df = pd.DataFrame()
+                raw_df["댓글 ID"] = issue_comments.get("comment_id", "")
+                raw_df["감성"] = issue_comments.get("sentiment_final", issue_comments.get("sentiment_label", ""))
+                raw_df["고객 여정"] = issue_comments.get("journey_stage", "")
+                raw_df["판단 축"] = issue_comments.get("judgment_axes", "")
+                raw_df["본문"] = issue_comments.apply(_extract_comment_text, axis=1)
+                st.dataframe(raw_df.head(120), width="stretch", hide_index=True)
+
+
+def _render_v3_reference_issues(top_issues: pd.DataFrame) -> None:
+    st.subheader("4) 📋 전체 이슈(참고)")
+    with st.expander("전체 이슈 보기", expanded=False):
+        if top_issues.empty:
+            st.caption("현재 표시할 이슈가 없습니다.")
+            return
+        ref_df = pd.DataFrame()
+        ref_df["이슈"] = top_issues.get("insight_title", "")
+        ref_df["권장 조치"] = top_issues.get("action_label_ko", top_issues.get("action_label", ""))
+        ref_df["우선순위"] = top_issues.get("priority_level", "")
+        ref_df["영향도"] = top_issues.get("impact_level", "")
+        ref_df["고객 여정"] = top_issues.get("journey_stage_label", top_issues.get("journey_stage", ""))
+        st.dataframe(ref_df.head(25), width="stretch", hide_index=True)
+
+
 def _render_strategy_shell(ctx: V3Context) -> None:
     top_issues = ctx.top_issues.copy()
     if top_issues.empty:
@@ -437,10 +626,10 @@ def _render_strategy_shell(ctx: V3Context) -> None:
     issue_comments = strategy_v2._filter_comments_for_issue(primary_issue, ctx.analysis_non_trash) if primary_issue is not None else pd.DataFrame()
     primary_key = _safe_text(primary_issue.get("issue_key", "")) if primary_issue is not None else ""
 
-    strategy_v2._render_decision_card(primary_issue, issue_comments)
-    strategy_v2._render_secondary_issues(top_issues, primary_key)
-    strategy_v2._render_evidence_drilldown(primary_issue, issue_comments, ctx.representative_comments, ctx.analysis_non_trash)
-    strategy_v2._render_all_issues_table(top_issues)
+    _render_v3_primary_issue(primary_issue, issue_comments)
+    _render_v3_secondary_issues(top_issues, primary_key)
+    _render_v3_evidence(primary_issue, issue_comments, ctx.representative_comments)
+    _render_v3_reference_issues(top_issues)
 
 
 def main() -> None:
