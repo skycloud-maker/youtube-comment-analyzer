@@ -87,6 +87,107 @@ def _issue_ratio_pct(issue_row: pd.Series) -> float:
     return float(pd.to_numeric(issue_row.get("issue_ratio", 0.0), errors="coerce") or 0.0) * 100.0
 
 
+def _first_axis_label(issue_row: pd.Series) -> str:
+    label = _safe_text(issue_row.get("judgment_axis_label"))
+    if label:
+        return _safe_text(label.split(",")[0])
+    axes = _parse_list_like(issue_row.get("judgment_axes", []))
+    return _safe_text(axes[0]) if axes else "핵심 판단축 미분류"
+
+
+def _build_action_sentence(issue_row: pd.Series) -> str:
+    stage = _safe_text(issue_row.get("journey_stage_label")) or _safe_text(issue_row.get("journey_stage")) or "해당 여정"
+    focus_axis = _first_axis_label(issue_row)
+    action_label = _safe_text(issue_row.get("action_label", "")).lower()
+    issue_key = _safe_text(issue_row.get("issue_key"))
+
+    def _variant(total: int) -> int:
+        if total <= 1:
+            return 0
+        seed = sum(ord(ch) for ch in (issue_key or f"{stage}|{focus_axis}|{action_label}"))
+        return seed % total
+
+    if action_label == "immediate_fix":
+        patterns = [
+            f"{focus_axis} 문제는 {stage} 단계에서 즉시 대응이 필요하며, 단기 조치와 운영 보완을 동시에 실행해야 합니다.",
+            f"{stage} 구간에서 반복되는 {focus_axis} 리스크를 이번 주 즉시 개선 과제로 고정하고 실행 점검을 병행해야 합니다.",
+            f"{focus_axis} 마찰은 {stage} 경험을 직접 훼손하고 있어, 지연 없이 긴급 수정과 운영 대응을 함께 추진해야 합니다.",
+        ]
+        return patterns[_variant(len(patterns))]
+    if action_label == "product_improvement":
+        patterns = [
+            f"{stage} 구간에서 반복되는 {focus_axis} 불편을 다음 제품·기능 개선 백로그의 최우선 항목으로 반영해야 합니다.",
+            f"{focus_axis} 이슈는 {stage} 단계에서 재현성이 높아 다음 릴리스 개선 항목으로 즉시 확정해야 합니다.",
+            f"{stage} 경험에서 누적되는 {focus_axis} 문제를 제품 개선 로드맵의 선행 과제로 이동해야 합니다.",
+        ]
+        return patterns[_variant(len(patterns))]
+    if action_label == "service_operation":
+        patterns = [
+            f"{stage} 단계에서 누적되는 {focus_axis} 이슈를 줄이기 위해 서비스 응대 기준과 처리 흐름을 우선 정비해야 합니다.",
+            f"{focus_axis} 관련 문의가 {stage} 구간에서 반복되므로, 처리 SLA와 이관 규칙을 먼저 재정렬해야 합니다.",
+            f"{stage} 접점에서의 {focus_axis} 대응 실패를 줄이도록 운영 시나리오와 대응 기준을 즉시 보강해야 합니다.",
+        ]
+        return patterns[_variant(len(patterns))]
+    if action_label == "marketing_message":
+        patterns = [
+            f"{stage} 구간의 기대-현실 괴리를 줄이도록 {focus_axis} 관련 안내 문구와 비교 메시지를 먼저 수정해야 합니다.",
+            f"{focus_axis} 인식 차이가 {stage} 단계에서 커지고 있어, 구매 전 메시지와 가이드 표현을 우선 보정해야 합니다.",
+            f"{stage} 여정에서 발생한 {focus_axis} 오해를 줄이기 위해 핵심 커뮤니케이션 문안을 즉시 재작성해야 합니다.",
+        ]
+        return patterns[_variant(len(patterns))]
+    if action_label == "maintain_strength":
+        patterns = [
+            f"{stage} 단계에서 확인된 {focus_axis} 강점을 유지·확장할 수 있도록 운영 기준과 커뮤니케이션을 일관되게 유지해야 합니다.",
+            f"{focus_axis} 강점은 {stage} 구간에서 재확인되므로, 동일 경험을 재현하는 운영 기준을 표준화해야 합니다.",
+            f"{stage} 단계에서 유효한 {focus_axis} 강점을 잃지 않도록 확산 가능한 실행안으로 고정해 유지해야 합니다.",
+        ]
+        return patterns[_variant(len(patterns))]
+    return f"{stage} 단계의 {focus_axis} 신호를 우선 관찰 대상으로 지정하고 추가 근거를 빠르게 축적해야 합니다."
+
+
+def _build_why_important_text(issue_row: pd.Series) -> str:
+    stage = _safe_text(issue_row.get("journey_stage_label")) or _safe_text(issue_row.get("journey_stage")) or "해당 여정"
+    sentiment = _safe_text(issue_row.get("sentiment_label")) or _sentiment_ko(issue_row.get("polarity_direction"))
+    issue_ratio = _issue_ratio_pct(issue_row)
+    cluster_size = int(pd.to_numeric(issue_row.get("supporting_cluster_count", 0), errors="coerce") or 0)
+    action_label = _safe_text(issue_row.get("action_label", "")).lower()
+
+    if action_label in {"immediate_fix", "service_operation"}:
+        risk = "지금 대응하지 않으면 불만 누적으로 서비스 신뢰 하락 위험이 커집니다."
+    elif action_label == "product_improvement":
+        risk = "개선이 늦어질수록 동일 사용 불편이 반복되어 제품 만족 회복 속도가 떨어질 수 있습니다."
+    elif action_label == "marketing_message":
+        risk = "기대 대비 체감 차이가 지속되면 구매 전환과 추천 의향이 함께 약화될 수 있습니다."
+    elif action_label == "maintain_strength":
+        risk = "강점을 관리하지 않으면 경쟁 비교 구간에서 현재 우위가 빠르게 희석될 수 있습니다."
+    else:
+        risk = "근거가 약한 상태에서 방치하면 이슈가 커진 뒤 대응하게 될 수 있습니다."
+
+    return (
+        f"{stage} 구간에서 {sentiment} 반응이 반복되어 사용자 경험 교란이 확인됩니다. "
+        f"일시 신호가 아니라 우선 검토해야 할 수준입니다 (영향 범위 {issue_ratio:.1f}%, 반복 근거 {cluster_size:,}건). "
+        f"{risk}"
+    )
+
+
+def _build_action_direction(issue_row: pd.Series) -> str:
+    action_label_ko = _safe_text(issue_row.get("action_label_ko")) or _safe_text(issue_row.get("action_label")) or "모니터링"
+    action_label = _safe_text(issue_row.get("action_label", "")).lower()
+    focus_axis = _first_axis_label(issue_row)
+
+    if action_label in {"immediate_fix", "product_improvement"}:
+        domain = "제품/기능"
+    elif action_label == "service_operation":
+        domain = "서비스/운영"
+    elif action_label == "marketing_message":
+        domain = "메시지/커뮤니케이션"
+    elif action_label == "maintain_strength":
+        domain = "강점 유지/확장"
+    else:
+        domain = "관찰/검증"
+    return f"권장 조치 유형은 **{action_label_ko}**이며, 이번 라운드는 **{domain}** 영역에서 `{focus_axis}` 중심으로 실행해야 합니다."
+
+
 def _sanitize_filter_options(options: dict[str, list[str]]) -> dict[str, list[str]]:
     """UI only: noisy product labels like '가전제품, 귀곰' 제거."""
     cleaned = dict(options)
@@ -95,6 +196,84 @@ def _sanitize_filter_options(options: dict[str, list[str]]) -> dict[str, list[st
     cleaned["products"] = [item for item in product_values if "," not in _safe_text(item)]
     cleaned["available_products"] = [item for item in available_values if "," not in _safe_text(item)]
     return cleaned
+
+
+def _issue_product_scope(issue_row: pd.Series) -> str:
+    level_type = _safe_text(issue_row.get("level_type"))
+    if level_type == "product_group":
+        return _safe_text(issue_row.get("level_id"))
+    return _safe_text(issue_row.get("product_group"))
+
+
+def _enforce_issue_product_consistency(top_issues: pd.DataFrame, selected_filters: dict[str, Any]) -> pd.DataFrame:
+    if top_issues is None or top_issues.empty:
+        return pd.DataFrame() if top_issues is None else top_issues
+    products_active = bool(selected_filters.get("products_active", False))
+    selected_products = {_safe_text(v) for v in selected_filters.get("products", []) if _safe_text(v)}
+    if not products_active or not selected_products:
+        return top_issues
+
+    working = top_issues.copy()
+    issue_products = working.apply(_issue_product_scope, axis=1)
+    mask = issue_products.isin(selected_products)
+    return working[mask].reset_index(drop=True)
+
+
+def _enforce_priority_ratio_consistency(top_issues: pd.DataFrame) -> pd.DataFrame:
+    if top_issues is None or top_issues.empty:
+        return pd.DataFrame() if top_issues is None else top_issues
+    working = top_issues.copy()
+    ratio = pd.to_numeric(working.get("issue_ratio", 0.0), errors="coerce").fillna(0.0)
+    high_mask = ratio.le(0) & working.get("priority_level", "").astype(str).eq("High")
+    if high_mask.any():
+        working.loc[high_mask, "priority_level"] = "Medium"
+        working.loc[high_mask, "insufficient_evidence"] = True
+    return working
+
+
+def _matches_issue_context(candidate: pd.Series, issue_row: pd.Series) -> bool:
+    stage = _safe_text(issue_row.get("journey_stage")).lower()
+    polarity = _safe_text(issue_row.get("polarity_direction")).lower()
+    primary_axis = _parse_list_like(issue_row.get("judgment_axes"))
+    primary_axis = _safe_text(primary_axis[0]) if primary_axis else ""
+    level_type = _safe_text(issue_row.get("level_type"))
+    level_id = _safe_text(issue_row.get("level_id"))
+    issue_product = _issue_product_scope(issue_row)
+
+    candidate_stage = _safe_text(candidate.get("journey_stage")).lower()
+    if stage and candidate_stage and candidate_stage != stage:
+        return False
+
+    candidate_axes = {_safe_text(v) for v in _parse_list_like(candidate.get("judgment_axes", [])) if _safe_text(v)}
+    if primary_axis and candidate_axes and primary_axis not in candidate_axes:
+        return False
+
+    mixed_flag = bool(candidate.get("mixed_flag", False))
+    candidate_sentiment = _safe_text(candidate.get("sentiment_final", candidate.get("sentiment_label", ""))).lower()
+    if polarity == "mixed":
+        if not mixed_flag and candidate_sentiment != "mixed":
+            return False
+    elif polarity:
+        if mixed_flag or (candidate_sentiment and candidate_sentiment != polarity):
+            return False
+
+    if level_type == "video" and level_id:
+        candidate_video = _safe_text(candidate.get("video_id"))
+        if candidate_video and candidate_video != level_id:
+            return False
+
+    candidate_product = _safe_text(candidate.get("product"))
+    if issue_product and candidate_product and candidate_product != issue_product:
+        return False
+
+    return True
+
+
+def _aligned_comment_pool(comments_df: pd.DataFrame, issue_row: pd.Series) -> pd.DataFrame:
+    if comments_df is None or comments_df.empty:
+        return pd.DataFrame() if comments_df is None else comments_df
+    mask = comments_df.apply(lambda row: _matches_issue_context(row, issue_row), axis=1)
+    return comments_df[mask].reset_index(drop=True)
 
 
 def _apply_pending_filter_reset_if_needed(options: dict[str, list[str]]) -> None:
@@ -294,7 +473,11 @@ def _render_sidebar_controls(active_mode: str, active_snapshot_run: str, options
 def _build_analysis_non_trash(data_bundle: dict[str, pd.DataFrame]) -> pd.DataFrame:
     analysis_non_trash = data_bundle.get("analysis_non_trash", pd.DataFrame()).copy()
     if not analysis_non_trash.empty:
-        return legacy.add_localized_columns(analysis_non_trash)
+        raw_product = analysis_non_trash.get("product", pd.Series("", index=analysis_non_trash.index)).astype(str)
+        localized = legacy.add_localized_columns(analysis_non_trash)
+        if "product" in localized.columns:
+            localized["product"] = raw_product.values
+        return localized
 
     analysis_comments_raw = data_bundle.get("analysis_comments", pd.DataFrame()).copy()
     if analysis_comments_raw.empty:
@@ -305,7 +488,11 @@ def _build_analysis_non_trash(data_bundle: dict[str, pd.DataFrame]) -> pd.DataFr
     analysis_non_trash = analysis_comments_raw[included & hygiene.ne("trash")].copy()
     if analysis_non_trash.empty:
         return analysis_non_trash
-    return legacy.add_localized_columns(analysis_non_trash)
+    raw_product = analysis_non_trash.get("product", pd.Series("", index=analysis_non_trash.index)).astype(str)
+    localized = legacy.add_localized_columns(analysis_non_trash)
+    if "product" in localized.columns:
+        localized["product"] = raw_product.values
+    return localized
 
 
 def _build_top_issue_tables(
@@ -332,6 +519,12 @@ def _build_top_issue_tables(
 
     top_issues = strategy_v2._compose_top_issue_table(strategy_video, strategy_product, analysis_non_trash)
     top_issues_fallback = strategy_v2._compose_top_issue_table(strategy_video_full, strategy_product_full, analysis_non_trash_full)
+
+    top_issues = _enforce_issue_product_consistency(top_issues, selected_filters)
+    top_issues_fallback = _enforce_issue_product_consistency(top_issues_fallback, selected_filters)
+
+    top_issues = _enforce_priority_ratio_consistency(top_issues)
+    top_issues_fallback = _enforce_priority_ratio_consistency(top_issues_fallback)
 
     # Quick search refinement only (no analysis rerun).
     top_issues = strategy_v2._apply_entry_search(top_issues, quick_search_query)
@@ -461,6 +654,38 @@ def _render_recovery_panel(*, has_fallback: bool, quick_search_query: str, selec
         st.caption("넓은 스코프에서도 전략 이슈가 부족합니다. 예시 보기로 화면 검증이 가능합니다.")
 
 
+def _select_primary_issue_with_evidence(
+    top_issues: pd.DataFrame,
+    analysis_non_trash: pd.DataFrame,
+) -> tuple[pd.Series | None, pd.DataFrame, pd.DataFrame]:
+    if top_issues is None or top_issues.empty:
+        return None, pd.DataFrame(), pd.DataFrame() if top_issues is None else top_issues
+
+    working = top_issues.copy().reset_index(drop=True)
+    valid_indices: list[int] = []
+    issue_comments_by_index: dict[int, pd.DataFrame] = {}
+
+    for idx, row in working.iterrows():
+        issue_comments = strategy_v2._filter_comments_for_issue(row, analysis_non_trash)
+        issue_comments = _aligned_comment_pool(issue_comments, row)
+        issue_comments_by_index[idx] = issue_comments
+        cluster_size = int(pd.to_numeric(row.get("supporting_cluster_count", 0), errors="coerce") or 0)
+        if cluster_size > 0 and len(issue_comments) > 0:
+            valid_indices.append(idx)
+
+    if valid_indices:
+        valid_df = working.iloc[valid_indices].reset_index(drop=True)
+        primary = valid_df.iloc[0]
+        primary_comments = issue_comments_by_index.get(valid_indices[0], pd.DataFrame())
+        return primary, primary_comments, valid_df
+
+    downgraded = working.copy()
+    downgraded.loc[:, "insufficient_evidence"] = True
+    downgraded.loc[:, "priority_level"] = downgraded.get("priority_level", "Low").astype(str).replace({"High": "Medium"})
+    first = downgraded.iloc[0]
+    return first, pd.DataFrame(), downgraded
+
+
 def _render_v3_primary_issue(issue_row: pd.Series | None, issue_comments: pd.DataFrame) -> None:
     st.subheader("1) 🔥 주요 1순위 이슈")
     if issue_row is None:
@@ -471,8 +696,7 @@ def _render_v3_primary_issue(issue_row: pd.Series | None, issue_comments: pd.Dat
     stage = _safe_text(issue_row.get("journey_stage_label")) or _safe_text(issue_row.get("journey_stage")) or "여정 미분류"
     axes = _safe_text(issue_row.get("judgment_axis_label")) or ", ".join(_parse_list_like(issue_row.get("judgment_axes"))) or "판단축 미분류"
     sentiment = _safe_text(issue_row.get("sentiment_label")) or _sentiment_ko(issue_row.get("polarity_direction"))
-    action = _safe_text(issue_row.get("action_summary")) or f"{stage} 단계 이슈 대응을 우선 과제로 설정해야 합니다."
-    action_label = _safe_text(issue_row.get("action_label_ko")) or _safe_text(issue_row.get("action_label")) or "모니터링"
+    action = _build_action_sentence(issue_row)
     priority = _safe_text(issue_row.get("priority_level")) or "Low"
     impact = _safe_text(issue_row.get("impact_level")) or "Low"
     issue_ratio = _issue_ratio_pct(issue_row)
@@ -484,21 +708,17 @@ def _render_v3_primary_issue(issue_row: pd.Series | None, issue_comments: pd.Dat
     st.success(action)
 
     st.markdown("#### 📌 왜 중요한가")
-    st.info(
-        f"{stage} 구간에서 {sentiment} 반응이 반복되고 있으며, "
-        f"영향 범위와 반복 강도를 함께 볼 때 우선 대응이 필요한 사안입니다. "
-        f"(이슈 비중 {issue_ratio:.1f}%, 반복 근거 {cluster_size:,}건)"
-    )
+    st.info(_build_why_important_text(issue_row))
 
     st.markdown("#### 📊 핵심 판단 근거")
     st.markdown(
-        f"- 현재 핵심 맥락은 **{stage} / {axes}** 입니다.\n"
-        f"- 감성 방향은 **{sentiment}** 이며 우선순위/영향도는 **{priority}/{impact}** 입니다.\n"
-        f"- 동일 성격 반응이 누적되어 일회성 이슈가 아니라 반복 이슈로 해석됩니다."
+        f"- 판단 맥락: **{stage} · {axes}**\n"
+        f"- 사용자 반응: **{sentiment}** 방향이며 우선순위/영향도는 **{priority}/{impact}**입니다.\n"
+        f"- 반복 신호: 일회성 이슈가 아니라 누적 관리가 필요한 상태입니다 (반복 {cluster_size:,}건, 영향 범위 {issue_ratio:.1f}%)."
     )
 
     st.markdown("#### 🧭 실행 방향")
-    st.write(f"권장 조치 유형은 **{action_label}** 입니다.")
+    st.write(_build_action_direction(issue_row))
 
     st.markdown("#### 📍 신뢰도")
     if insufficient or cluster_size < 3:
@@ -521,8 +741,8 @@ def _render_v3_secondary_issues(top_issues: pd.DataFrame, primary_issue_key: str
             title = _safe_text(row.get("insight_title")) or "보조 이슈"
             action = _safe_text(row.get("action_label_ko")) or _safe_text(row.get("action_label")) or "모니터링"
             stage = _safe_text(row.get("journey_stage_label")) or _safe_text(row.get("journey_stage")) or "미분류"
-            st.markdown(f"**{idx}. {title}**")
-            st.caption(f"{stage} 구간에서 `{action}` 방향 대응이 필요합니다.")
+            st.markdown(f"{idx}. **{title}**")
+            st.caption(f"대응 힌트: {stage} 구간 `{action}` 우선")
 
 
 def _render_v3_evidence(
@@ -539,17 +759,17 @@ def _render_v3_evidence(
         total_issue_comments = int(len(issue_comments))
         if total_issue_comments > 0:
             st.caption(
-                f"동일 맥락 반응이 반복 확인되고 있어, 단일 댓글이 아닌 집계된 근거로 판단했습니다. "
-                f"(연결 반응 {total_issue_comments:,}건)"
+                f"단일 댓글이 아닌 반복 반응을 근거로 판단했습니다 (연결 반응 {total_issue_comments:,}건)."
             )
         else:
-            st.caption("현재 필터 조건에서는 연결 반응이 적어 대표 근거 중심으로 제공합니다.")
+            st.caption("연결 반응이 적어 대표 근거 중심으로 제공합니다.")
 
         st.markdown("#### 대표 근거 댓글")
         rep_pool = representative_comments.copy()
         rep_ids = _parse_list_like(issue_row.get("supporting_representatives", []))
         if not rep_pool.empty and "comment_id" in rep_pool.columns and rep_ids:
             rep_pool = rep_pool[rep_pool["comment_id"].astype(str).isin(rep_ids)].copy()
+        rep_pool = _aligned_comment_pool(rep_pool, issue_row)
         if rep_pool.empty:
             rep_pool = issue_comments.copy()
 
@@ -559,23 +779,23 @@ def _render_v3_evidence(
             sort_cols = [col for col in ("like_count", legacy.COL_LIKES, "published_at") if col in rep_pool.columns]
             if sort_cols:
                 rep_pool = rep_pool.sort_values(sort_cols, ascending=[False] * len(sort_cols), na_position="last")
-            for idx, (_, row) in enumerate(rep_pool.head(3).iterrows(), start=1):
+            for idx, (_, row) in enumerate(rep_pool.head(2).iterrows(), start=1):
                 sentiment = _sentiment_ko(row.get("sentiment_final", row.get("sentiment_label", "neutral")))
-                text = _clip_text(_extract_comment_text(row), 220)
+                text = _clip_text(_extract_comment_text(row), 140)
                 st.markdown(f"{idx}. ({sentiment}) {text}")
 
         st.markdown("#### 반복 근거 요약")
         if total_issue_comments >= 3:
             st.write(
-                f"이 이슈는 동일 여정/판단축 맥락에서 반복적으로 확인되고 있습니다. "
-                f"일시적 반응이 아니라 관리 대상 신호입니다. (반복 확인 {total_issue_comments:,}건)"
+                f"같은 여정/판단축에서 반복 신호가 확인되어 관리 대상 이슈로 볼 수 있습니다 (반복 확인 {total_issue_comments:,}건)."
             )
         elif total_issue_comments > 0:
-            st.write("현재는 초기 신호 수준으로 관찰되며, 추가 반복 확인이 필요합니다.")
+            st.write("현재는 초기 신호로 보이며 추가 반복 확인이 필요합니다.")
         else:
-            st.write("현재 조건에서는 반복 근거를 확정하기 어렵습니다.")
+            st.write("현재 조건에서는 반복 근거 확정이 어렵습니다.")
 
         st.markdown("#### 원천 댓글 (참고)")
+        st.caption("필요 시 세부 검증을 위한 참고 데이터입니다.")
         with st.expander("원천 댓글 상세 보기", expanded=False):
             if issue_comments.empty:
                 st.caption("표시할 원천 댓글이 없습니다.")
@@ -586,11 +806,12 @@ def _render_v3_evidence(
                 raw_df["고객 여정"] = issue_comments.get("journey_stage", "")
                 raw_df["판단 축"] = issue_comments.get("judgment_axes", "")
                 raw_df["본문"] = issue_comments.apply(_extract_comment_text, axis=1)
-                st.dataframe(raw_df.head(120), width="stretch", hide_index=True)
+                st.dataframe(raw_df.head(50), width="stretch", hide_index=True)
 
 
 def _render_v3_reference_issues(top_issues: pd.DataFrame) -> None:
-    st.subheader("4) 📋 전체 이슈(참고)")
+    st.subheader("4) 참고 이슈")
+    st.caption("필요할 때만 확인하는 참고 목록입니다.")
     with st.expander("전체 이슈 보기", expanded=False):
         if top_issues.empty:
             st.caption("현재 표시할 이슈가 없습니다.")
@@ -622,8 +843,20 @@ def _render_strategy_shell(ctx: V3Context) -> None:
             st.caption("현재 조건에서는 표시할 이슈가 없습니다.")
         return
 
-    primary_issue = strategy_v2._get_primary_issue(top_issues)
-    issue_comments = strategy_v2._filter_comments_for_issue(primary_issue, ctx.analysis_non_trash) if primary_issue is not None else pd.DataFrame()
+    primary_issue, issue_comments, top_issues = _select_primary_issue_with_evidence(top_issues, ctx.analysis_non_trash)
+    if primary_issue is None and not ctx.top_issues_fallback.empty:
+        primary_issue, issue_comments, top_issues = _select_primary_issue_with_evidence(
+            ctx.top_issues_fallback.copy(),
+            ctx.analysis_non_trash,
+        )
+    if primary_issue is None:
+        _render_recovery_panel(
+            has_fallback=not ctx.top_issues_fallback.empty,
+            quick_search_query=ctx.quick_search_query,
+            selected_filters=ctx.selected_filters,
+        )
+        return
+
     primary_key = _safe_text(primary_issue.get("issue_key", "")) if primary_issue is not None else ""
 
     _render_v3_primary_issue(primary_issue, issue_comments)
