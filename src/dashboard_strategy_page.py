@@ -211,120 +211,133 @@ def _action_domain_label(issue: pd.Series) -> str:
     return mapping.get(domain, domain)
 
 
+def _variant_key(issue: pd.Series) -> int:
+    basis = _safe_text(issue.get("issue_key")) or _safe_text(issue.get("insight_title"))
+    if not basis:
+        return 0
+    return abs(hash(basis)) % 3
+
+
 def _format_action_sentence(issue: pd.Series) -> str:
-    summary = _safe_text(issue.get("action_summary"))
+    summary = _safe_text(issue.get("action_summary")).rstrip(".")
     journey = _journey_label(issue)
     axis = _axis_label(issue) or "핵심 판단 축"
-    if summary and any(token in summary for token in ["해야", "필요", "개선", "정비", "강화"]):
-        return summary if summary.endswith(".") else f"{summary}."
+    domain = _action_domain_label(issue)
+
+    if summary and any(token in summary for token in ["해야", "필요", "개선", "정비", "강화", "우선"]):
+        return f"{summary}."
     if summary:
-        return f"{journey} 단계의 '{axis}' 이슈를 줄이기 위해 {summary}을 우선 실행해야 합니다."
+        variants = [
+            f"{journey} 단계의 '{axis}' 이슈를 줄이기 위해 {summary}을 우선 실행해야 합니다.",
+            f"{domain} 관점에서 {summary}을(를) 즉시 실행 과제로 반영해야 합니다.",
+            f"현재 반복되는 '{axis}' 신호를 완화하려면 {summary} 조치를 먼저 적용해야 합니다.",
+        ]
+        return variants[_variant_key(issue)]
     return f"{journey} 단계에서 반복되는 '{axis}' 문제를 우선 대응 과제로 설정해야 합니다."
 
 
-def _format_importance_sentence(issue: pd.Series, issue_comments: pd.DataFrame) -> str:
+def _format_importance_sentence(issue: pd.Series) -> str:
     summary = _safe_text(issue.get("insight_summary"))
-    polarity = _safe_text(issue.get("sentiment_label")) or _safe_text(issue.get("polarity_direction")) or "중립"
     clusters = int(pd.to_numeric(issue.get("supporting_cluster_count", 0), errors="coerce") or 0)
+    polarity = _safe_text(issue.get("sentiment_label")) or _safe_text(issue.get("polarity_direction")) or "중립"
     if not summary:
-        summary = "동일한 사용자 반응이 반복되고 있어 일시적 의견보다 구조적 개선 신호로 해석됩니다."
-    risk_hint = (
-        "대응이 지연되면 불만 확산과 이탈 가능성이 커질 수 있습니다."
+        summary = "동일한 반응이 반복되어 일시적 의견이 아니라 구조적 신호로 해석됩니다."
+    risk_tail = (
+        "대응이 늦어질수록 불만 확산 위험이 커집니다."
         if str(polarity).startswith("부정")
-        else "강점을 유지·확대하지 않으면 체감 가치가 빠르게 약화될 수 있습니다."
+        else "강점을 유지하지 않으면 체감 가치가 빠르게 약화될 수 있습니다."
     )
-    return f"{summary} 현재 연결된 반복 근거는 {clusters:,}건이며, {risk_hint}"
+    return f"{summary} 현재 반복 근거는 {clusters:,}건이며, {risk_tail}"
 
 
-def _format_signal_summary(issue: pd.Series, issue_comments: pd.DataFrame) -> str:
+def _format_signal_sentence(issue: pd.Series, issue_comments: pd.DataFrame) -> str:
     ratio = float(pd.to_numeric(issue.get("issue_ratio", 0.0), errors="coerce") or 0.0) * 100.0
     clusters = int(pd.to_numeric(issue.get("supporting_cluster_count", 0), errors="coerce") or 0)
-    polarity = _safe_text(issue.get("sentiment_label")) or _safe_text(issue.get("polarity_direction")) or "중립"
     journey = _journey_label(issue)
+    polarity = _safe_text(issue.get("sentiment_label")) or _safe_text(issue.get("polarity_direction")) or "중립"
     return (
-        f"이 이슈는 {journey} 단계에서 {polarity} 반응으로 반복 확인되며, "
-        f"현재 범위 기준 영향 범위 {ratio:.1f}%·반복 근거 {clusters:,}건·연결 댓글 {len(issue_comments):,}건입니다."
+        f"{journey} 단계에서 {polarity} 반응이 반복되며, 영향 범위는 {ratio:.1f}%, "
+        f"반복 근거 {clusters:,}건, 연결 댓글 {len(issue_comments):,}건입니다."
     )
 
 
 def _render_scope_summary(context: StrategyPageContext, video_info: dict[str, Any]) -> None:
     selected_filters = context.selected_filters
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.caption("데이터 모드")
-        st.write("실데이터" if _safe_text(context.active_mode).lower() == "real" else "샘플")
-    with c2:
-        st.caption("스냅샷")
-        st.write(_safe_text(context.active_snapshot_run) or "전체 run")
-    with c3:
-        st.caption("영상 수")
-        st.write(f"{len(context.filtered_videos):,}")
-    with c4:
-        st.caption("댓글 수")
-        st.write(f"{len(context.filtered_comments):,}")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.caption("데이터 모드")
+            st.write("실데이터" if _safe_text(context.active_mode).lower() == "real" else "샘플")
+        with c2:
+            st.caption("스냅샷")
+            st.write(_safe_text(context.active_snapshot_run) or "전체 run")
+        with c3:
+            st.caption("영상 수")
+            st.write(f"{len(context.filtered_videos):,}")
+        with c4:
+            st.caption("댓글 수")
+            st.write(f"{len(context.filtered_comments):,}")
 
-    st.caption(
-        "현재 범위: "
-        f"제품({_scope_summary_line(list(selected_filters.get('products', [])))}), "
-        f"시장({_scope_summary_line(list(selected_filters.get('regions', [])))}), "
-        f"브랜드({_scope_summary_line(list(selected_filters.get('brands', [])))}), "
-        f"감성({_scope_summary_line(list(selected_filters.get('sentiments', [])))}), "
-        f"여정({_scope_summary_line(list(selected_filters.get('cej', [])))})."
-    )
-
-    selected_video_id = _safe_text(video_info.get("selected_video_id"))
-    if not selected_video_id:
-        st.caption("해석 기준: 현재 필터 전체 범위 기반 전략 해석")
-        return
-    if bool(video_info.get("selected_video_matched", False)):
-        st.success(f"영상 상세에서 선택한 `{selected_video_id}` 영상 컨텍스트를 우선 반영해 전략 이슈를 정렬했습니다.")
-    else:
-        st.info(
-            f"선택 영상 `{selected_video_id}`와 직접 연결된 전략 이슈가 없어, 현재 필터 전체 범위 기준으로 해석합니다."
+        st.caption(
+            "현재 범위: "
+            f"제품({_scope_summary_line(list(selected_filters.get('products', [])))}), "
+            f"시장({_scope_summary_line(list(selected_filters.get('regions', [])))}), "
+            f"브랜드({_scope_summary_line(list(selected_filters.get('brands', [])))}), "
+            f"감성({_scope_summary_line(list(selected_filters.get('sentiments', [])))}), "
+            f"고객 여정({_scope_summary_line(list(selected_filters.get('cej', [])))})."
         )
+
+        selected_video_id = _safe_text(video_info.get("selected_video_id"))
+        if not selected_video_id:
+            st.caption("해석 기준: 현재 필터 전체 범위")
+            return
+        if bool(video_info.get("selected_video_matched", False)):
+            st.success(f"선택 영상 `{selected_video_id}` 문맥을 우선 반영해 이슈를 정렬했습니다.")
+        else:
+            st.info(f"선택 영상 `{selected_video_id}`와 직접 연결된 이슈가 없어, 필터 전체 범위 기준으로 해석합니다.")
 
 
 def _render_primary(primary: pd.Series, issue_comments: pd.DataFrame) -> None:
     title = _safe_text(primary.get("insight_title")) or "핵심 전략 이슈"
     action_sentence = _format_action_sentence(primary)
-    importance_sentence = _format_importance_sentence(primary, issue_comments)
-    signal_sentence = _format_signal_summary(primary, issue_comments)
+    importance_sentence = _format_importance_sentence(primary)
+    signal_sentence = _format_signal_sentence(primary, issue_comments)
     journey = _journey_label(primary)
     axes = _axis_label(primary) or "판단 축 미분류"
     priority = _safe_text(primary.get("priority_level")) or "Low"
     impact = _safe_text(primary.get("impact_level")) or "Low"
 
-    st.markdown("#### 주요 1순위 이슈")
-    st.markdown(f"**{title}**")
-    st.markdown(f"👉 **지금 해야 할 것**: {action_sentence}")
-    st.markdown(f"📌 **왜 중요한가**: {importance_sentence}")
-    st.markdown(f"📊 **핵심 판단 근거**: {signal_sentence}")
-    st.markdown(
-        f"🧭 **실행 방향**: {_action_domain_label(primary)} 중심으로 `{journey}` 단계의 `{axes}` 이슈를 우선 대응합니다. "
-        f"(우선순위 {priority} · 영향도 {impact})"
-    )
+    st.markdown("## 🔥 주요 1순위 이슈")
+    with st.container(border=True):
+        st.markdown(f"### {title}")
+        st.markdown(f"👉 **지금 해야 할 것**: {action_sentence}")
+        st.markdown(f"📌 **왜 중요한가**: {importance_sentence}")
+        st.markdown(f"📊 **핵심 판단 근거**: {signal_sentence}")
+        st.caption(
+            f"실행 범주: {_action_domain_label(primary)} · 고객 여정: {journey} · 판단 축: {axes} · "
+            f"우선순위/영향도: {priority}/{impact}"
+        )
 
     clusters = int(pd.to_numeric(primary.get("supporting_cluster_count", 0), errors="coerce") or 0)
     insufficient = bool(primary.get("insufficient_evidence", False)) or clusters < 3 or issue_comments.empty
     if insufficient:
-        st.warning("현재 범위에서는 근거가 충분하지 않아 방향성 점검 단계로 해석해야 합니다. 범위를 넓히거나 필터를 완화해 주세요.")
+        st.warning("근거가 충분하지 않아 방향성 점검 단계로 해석해야 합니다. 필터를 완화하거나 범위를 넓혀 주세요.")
 
 
 def _render_secondary(top_issues: pd.DataFrame, primary_issue_key: str) -> None:
-    st.markdown("#### 함께 고려할 이슈")
     rest = top_issues[top_issues.get("issue_key", pd.Series("", index=top_issues.index)).astype(str).ne(_safe_text(primary_issue_key))].copy()
     if rest.empty:
-        st.caption("현재 범위에서 보조 이슈는 없습니다.")
         return
-    for _, row in rest.head(5).iterrows():
-        title = _safe_text(row.get("insight_title")) or "보조 이슈"
-        action = _format_action_sentence(row)
-        st.caption(f"- {title}: {action[:120]}{'...' if len(action) > 120 else ''}")
+
+    with st.expander("🧩 함께 고려할 이슈", expanded=False):
+        for _, row in rest.head(5).iterrows():
+            title = _safe_text(row.get("insight_title")) or "보조 이슈"
+            action = _format_action_sentence(row)
+            st.caption(f"- {title}: {action[:110]}{'...' if len(action) > 110 else ''}")
 
 
 def _render_evidence(primary: pd.Series, issue_comments: pd.DataFrame, representative_comments: pd.DataFrame) -> None:
-    st.markdown("#### 판단 근거")
-    with st.expander("근거 보기", expanded=False):
+    with st.expander("🔎 판단 근거 보기", expanded=False):
         rep_ids = _parse_list_like(primary.get("supporting_representatives", []))
         rep_pool = representative_comments.copy()
         if not rep_pool.empty and "comment_id" in rep_pool.columns and rep_ids:
@@ -335,42 +348,42 @@ def _render_evidence(primary: pd.Series, issue_comments: pd.DataFrame, represent
         if rep_pool.empty:
             st.caption("연결 가능한 대표 근거가 없습니다.")
         else:
-            st.caption("대표 근거(최대 2개)")
+            st.caption("대표 근거 1~2개")
             for idx, (_, row) in enumerate(rep_pool.head(2).iterrows(), start=1):
                 body = _safe_text(row.get("text_display", row.get("원문 댓글", row.get("cleaned_text", ""))))
                 sentiment = _safe_text(row.get("sentiment_final", row.get("sentiment_label", "neutral")))
-                st.markdown(f"{idx}. ({sentiment}) {body[:180]}{'...' if len(body) > 180 else ''}")
+                st.markdown(f"{idx}. ({sentiment}) {body[:160]}{'...' if len(body) > 160 else ''}")
 
         clusters = int(pd.to_numeric(primary.get("supporting_cluster_count", 0), errors="coerce") or 0)
         if issue_comments.empty:
-            st.caption("반복 근거 연결이 부족합니다.")
-        else:
-            st.caption(
-                f"동일 맥락의 반응이 현재 범위에서 반복 확인됩니다. "
-                f"(연결 댓글 {len(issue_comments):,}건, 반복 근거 {clusters:,}건)"
-            )
-            with st.expander("원문 댓글 상세(참고)", expanded=False):
-                raw = pd.DataFrame()
-                raw["comment_id"] = issue_comments.get("comment_id", "")
-                raw["sentiment"] = issue_comments.get("sentiment_final", issue_comments.get("sentiment_label", ""))
-                raw["journey_stage"] = issue_comments.get("journey_stage", "")
-                raw["judgment_axes"] = issue_comments.get("judgment_axes", "")
-                raw["text"] = issue_comments.get("text_display", issue_comments.get("cleaned_text", ""))
-                st.dataframe(raw.head(30), width="stretch", hide_index=True)
+            st.caption("현재 범위에서는 반복 근거가 충분하지 않습니다.")
+            return
+
+        st.caption(
+            f"동일 맥락의 반응이 반복 확인됩니다. (연결 댓글 {len(issue_comments):,}건, 반복 근거 {clusters:,}건)"
+        )
+        with st.expander("원문 댓글 상세(참고)", expanded=False):
+            raw = pd.DataFrame()
+            raw["comment_id"] = issue_comments.get("comment_id", "")
+            raw["sentiment"] = issue_comments.get("sentiment_final", issue_comments.get("sentiment_label", ""))
+            raw["journey_stage"] = issue_comments.get("journey_stage", "")
+            raw["judgment_axes"] = issue_comments.get("judgment_axes", "")
+            raw["text"] = issue_comments.get("text_display", issue_comments.get("cleaned_text", ""))
+            st.dataframe(raw.head(20), width="stretch", hide_index=True)
 
 
 def render_strategy_page(context: StrategyPageContext) -> None:
     st.markdown("### 전략 인사이트")
-    st.caption("현재 필터/선택 범위를 그대로 받아 전략 해석을 제공합니다. 별도 실행·검색·필터는 이 페이지에서 제공하지 않습니다.")
+    st.caption("현재 필터/선택 범위를 그대로 반영해 전략 해석을 제공합니다.")
 
     if context.filtered_comments.empty or context.filtered_videos.empty:
-        st.warning("현재 범위에서 전략 해석에 필요한 댓글·영상 데이터가 부족합니다. Page 1에서 범위를 넓혀주세요.")
+        st.warning("현재 범위에서 전략 해석에 필요한 댓글·영상 데이터가 부족합니다. Page 1에서 범위를 넓혀 주세요.")
         return
     if context.analysis_non_trash.empty:
-        st.warning("현재 범위에서 전략 해석용 분석 데이터가 부족합니다. 필터를 완화하거나 다른 스냅샷을 확인해 주세요.")
+        st.warning("현재 범위에서 전략 해석용 데이터가 부족합니다. 필터를 완화하거나 다른 스냅샷을 확인해 주세요.")
         return
     if context.strategy_video_insights.empty and context.strategy_product_group_insights.empty:
-        st.warning("전략 인사이트 데이터가 없어 현재 범위의 해석을 만들 수 없습니다.")
+        st.warning("전략 인사이트 데이터가 없어 현재 범위의 해석을 생성할 수 없습니다.")
         return
 
     top_issues = _build_top_issues(context)
