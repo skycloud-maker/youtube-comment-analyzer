@@ -7187,22 +7187,6 @@ def main() -> None:
 
     from src import dashboard_strategy_page as strategy_page
 
-    strategy_context = strategy_page.build_strategy_context(
-        selected_filters=selected_filters,
-        active_mode=active_mode,
-        active_snapshot_run=active_snapshot_run,
-        filtered_comments=filtered_comments,
-        all_comments=all_comments,
-        filtered_videos=filtered_videos,
-        analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
-        representative_comments=bundle.get("representative_comments", pd.DataFrame()),
-        strategy_video_insights=data.get("strategy_video_insights", pd.DataFrame()),
-        strategy_product_group_insights=data.get("strategy_product_group_insights", pd.DataFrame()),
-        strategy_video_insight_candidates=data.get("strategy_video_insight_candidates", pd.DataFrame()),
-        strategy_product_group_insight_candidates=data.get("strategy_product_group_insight_candidates", pd.DataFrame()),
-        selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
-    )
-
     tab_comments, tab_videos, tab_strategy = st.tabs(["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트"])
 
     with tab_comments:
@@ -7403,6 +7387,21 @@ def main() -> None:
         )
 
     with tab_strategy:
+        strategy_context = strategy_page.build_strategy_context(
+            selected_filters=selected_filters,
+            active_mode=active_mode,
+            active_snapshot_run=active_snapshot_run,
+            filtered_comments=filtered_comments,
+            all_comments=all_comments,
+            filtered_videos=filtered_videos,
+            analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
+            representative_comments=bundle.get("representative_comments", pd.DataFrame()),
+            strategy_video_insights=data.get("strategy_video_insights", pd.DataFrame()),
+            strategy_product_group_insights=data.get("strategy_product_group_insights", pd.DataFrame()),
+            strategy_video_insight_candidates=data.get("strategy_video_insight_candidates", pd.DataFrame()),
+            strategy_product_group_insight_candidates=data.get("strategy_product_group_insight_candidates", pd.DataFrame()),
+            selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
+        )
         strategy_page.render_strategy_page(strategy_context)
 
 
