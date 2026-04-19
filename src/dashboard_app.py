@@ -147,6 +147,7 @@ SESSION_DATA_MODE_KEY = "dashboard_data_mode"
 SESSION_DATA_SIGNATURE_KEY = "dashboard_data_signature"
 SESSION_LAST_RUN_RESULT_KEY = "dashboard_last_run_result"
 SESSION_RUN_SNAPSHOT_KEY = "dashboard_run_snapshot"
+SESSION_SELECTED_VIDEO_ID_KEY = "dashboard_selected_video_id"
 RUN_SNAPSHOT_ALL = "__ALL_RUNS__"
 STATE_SNAPSHOT_DIR = CACHE_DIR / "saved_states"
 STATE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -6178,6 +6179,7 @@ def render_video_summary_page(
     if not selected_video_id:
         st.warning("선택된 영상 ID를 찾지 못했습니다. 다른 행을 선택해 주세요.")
         return
+    st.session_state[SESSION_SELECTED_VIDEO_ID_KEY] = selected_video_id
 
     matched_rows = summary[summary["video_id"].astype(str).eq(selected_video_id)]
     if matched_rows.empty:
@@ -7159,7 +7161,25 @@ def main() -> None:
         )
 
 
-    tab_comments, tab_videos = st.tabs(["댓글 VoC 대시보드", "영상 분석 요약"])
+    from src import dashboard_strategy_page as strategy_page
+
+    strategy_context = strategy_page.build_strategy_context(
+        selected_filters=selected_filters,
+        active_mode=active_mode,
+        active_snapshot_run=active_snapshot_run,
+        filtered_comments=filtered_comments,
+        all_comments=all_comments,
+        filtered_videos=filtered_videos,
+        analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
+        representative_comments=bundle.get("representative_comments", pd.DataFrame()),
+        strategy_video_insights=data.get("strategy_video_insights", pd.DataFrame()),
+        strategy_product_group_insights=data.get("strategy_product_group_insights", pd.DataFrame()),
+        strategy_video_insight_candidates=data.get("strategy_video_insight_candidates", pd.DataFrame()),
+        strategy_product_group_insight_candidates=data.get("strategy_product_group_insight_candidates", pd.DataFrame()),
+        selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
+    )
+
+    tab_comments, tab_videos, tab_strategy = st.tabs(["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트"])
 
     with tab_comments:
         st.caption("먼저 핵심 요약을 확인한 뒤, 아래 차트와 대표 코멘트에서 어떤 이슈가 실제로 반복되는지 내려가며 읽을 수 있습니다.")
@@ -7357,6 +7377,9 @@ def main() -> None:
             filtered_videos,
             analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
         )
+
+    with tab_strategy:
+        strategy_page.render_strategy_page(strategy_context)
 
 
 if __name__ == "__main__":
