@@ -58,6 +58,7 @@ CACHE_META = CACHE_DIR / "dashboard_bundle_meta.json"
 CLOUD_CACHE_FILE = CACHE_DIR / "dashboard_bundle_cloud.pkl"
 CLOUD_CACHE_META = CACHE_DIR / "dashboard_bundle_cloud_meta.json"
 SNAPSHOT_PREF_FILE = CACHE_DIR / "last_snapshot_pref.json"
+DEFAULT_SAMPLE_STATE_FILE = CACHE_DIR / "default_sample_state.json"
 CACHE_SCHEMA_VERSION = DASHBOARD_SETTINGS.cache_schema_version
 DASHBOARD_BUILD_LABEL = DASHBOARD_SETTINGS.build_label
 REGION_LABELS = {"KR": "\uD55C\uAD6D", "US": "\uBBF8\uAD6D"}
@@ -608,6 +609,52 @@ def _extract_ui_state_document(doc: Any) -> tuple[bool, dict[str, Any], dict[str
 def _extract_ui_state_payload(doc: Any) -> tuple[bool, dict[str, Any], str]:
     ok, payload, _, message = _extract_ui_state_document(doc)
     return ok, payload, message
+
+
+def _resolve_default_sample_state_file() -> Path:
+    env_path = _safe_text(os.getenv("VOC_DEFAULT_SAMPLE_STATE_FILE", ""))
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        return candidate if candidate.is_absolute() else (BASE_DIR / candidate).resolve()
+    return DEFAULT_SAMPLE_STATE_FILE
+
+
+def _read_ui_state_document_from_path(path: Path) -> tuple[bool, dict[str, Any], dict[str, pd.DataFrame] | None, str]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return False, {}, None, "기본 샘플 상태 파일이 없습니다."
+    except UnicodeDecodeError:
+        return False, {}, None, "기본 샘플 상태 파일 인코딩이 올바르지 않습니다."
+    except json.JSONDecodeError:
+        return False, {}, None, "기본 샘플 상태 파일이 유효한 JSON 형식이 아닙니다."
+    except Exception as exc:
+        return False, {}, None, f"기본 샘플 상태 파일을 읽지 못했습니다: {exc}"
+    return _extract_ui_state_document(doc)
+
+
+def _apply_default_sample_state() -> tuple[bool, str]:
+    default_path = _resolve_default_sample_state_file()
+    if not default_path.exists():
+        return False, ""
+
+    ok, payload, embedded_bundle, message = _read_ui_state_document_from_path(default_path)
+    if not ok:
+        return False, f"기본 샘플 상태 파일 적용 실패: {message}"
+
+    sample_payload = dict(payload)
+    sample_payload["mode"] = "sample"
+    sample_payload["snapshot_run"] = RUN_SNAPSHOT_ALL
+
+    can_restore, restore_message = _validate_restore_data_availability(
+        sample_payload,
+        embedded_bundle=embedded_bundle,
+    )
+    if not can_restore:
+        return False, f"기본 샘플 상태 파일 적용 실패: {restore_message}"
+
+    _apply_saved_ui_state(sample_payload, embedded_bundle=embedded_bundle)
+    return True, f"샘플 기본 상태 적용: {default_path.name}"
 
 
 def _read_uploaded_ui_state(uploaded_file: Any) -> tuple[bool, dict[str, Any], dict[str, pd.DataFrame] | None, str]:
@@ -6773,10 +6820,18 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### 데이터 모드")
         st.caption(f"현재 모드: {'샘플 모드' if active_mode == 'sample' else '실데이터 모드'}")
+        sample_load_notice = _safe_text(st.session_state.pop("sample_load_notice", ""))
+        if sample_load_notice:
+            st.info(sample_load_notice)
         col_sample, col_real = st.columns(2)
         with col_sample:
             if st.button("샘플 로드", width="stretch", type="secondary"):
                 _set_data_mode("sample", force_refresh=False)
+                default_applied, notice = _apply_default_sample_state()
+                if default_applied:
+                    st.session_state["sample_load_notice"] = notice
+                elif notice:
+                    st.session_state["sample_load_notice"] = notice
                 st.rerun()
         with col_real:
             if st.button("실데이터 새로고침", width="stretch", type="primary"):
