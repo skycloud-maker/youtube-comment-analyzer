@@ -6999,6 +6999,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     st.caption("주간 감성 변화, 핵심 키워드, CEJ 단계별 문제, 대표 코멘트를 제품·국가별로 빠르게 확인합니다.")
+    st.caption("시작 가이드: 1) 필터 설정 → 2) 영상 확인 → 3) 전략 인사이트 확인")
     nlp_health, _, nlp_health_text = _nlp_enrichment_health(comments_df)
     if nlp_health == "fallback":
         st.warning(f"NLP 상태: Fallback 모드. {nlp_health_text}")

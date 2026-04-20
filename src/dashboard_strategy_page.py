@@ -211,29 +211,26 @@ def _action_domain_label(issue: pd.Series) -> str:
     return mapping.get(domain, domain)
 
 
-def _variant_key(issue: pd.Series) -> int:
-    basis = _safe_text(issue.get("issue_key")) or _safe_text(issue.get("insight_title"))
-    if not basis:
-        return 0
-    return abs(hash(basis)) % 3
-
-
 def _format_action_sentence(issue: pd.Series) -> str:
-    summary = _safe_text(issue.get("action_summary")).rstrip(".")
     journey = _journey_label(issue)
     axis = _axis_label(issue) or "핵심 판단 축"
     domain = _action_domain_label(issue)
+    summary = _safe_text(issue.get("action_summary")).rstrip(".")
+    target = f"{journey} 단계의 '{axis}'"
 
-    if summary and any(token in summary for token in ["해야", "필요", "개선", "정비", "강화", "우선"]):
-        return f"{summary}."
-    if summary:
-        variants = [
-            f"{journey} 단계의 '{axis}' 이슈를 줄이기 위해 {summary}을 우선 실행해야 합니다.",
-            f"{domain} 관점에서 {summary}을(를) 즉시 실행 과제로 반영해야 합니다.",
-            f"현재 반복되는 '{axis}' 신호를 완화하려면 {summary} 조치를 먼저 적용해야 합니다.",
-        ]
-        return variants[_variant_key(issue)]
-    return f"{journey} 단계에서 반복되는 '{axis}' 문제를 우선 대응 과제로 설정해야 합니다."
+    domain_actions = {
+        "제품 개선": "기능·품질 개선안을 바로 반영",
+        "UX/가이드": "설정·안내 흐름을 단순화",
+        "운영/서비스": "응답·처리 절차를 단축",
+        "메시지/커뮤니케이션": "핵심 메시지를 재정렬",
+        "정책/사업": "정책 기준을 조정",
+    }
+    default_action = domain_actions.get(domain, "실행 항목으로 전환")
+    vague_tokens = ("필요", "검토", "고려")
+
+    if summary and not any(token in summary for token in vague_tokens):
+        return f"{target} 이슈를 줄이기 위해 {summary}하고, {domain} 영역에서 즉시 실행해야 합니다."
+    return f"{target} 이슈를 줄이기 위해 {default_action}하고, {domain} 영역에서 즉시 실행해야 합니다."
 
 
 def _format_importance_sentence(issue: pd.Series) -> str:
@@ -259,6 +256,16 @@ def _format_signal_sentence(issue: pd.Series, issue_comments: pd.DataFrame) -> s
         f"{journey} 단계에서 {polarity} 반응이 반복되며, 영향 범위는 {ratio:.1f}%, "
         f"반복 근거 {clusters:,}건, 연결 댓글 {len(issue_comments):,}건입니다."
     )
+
+
+def _priority_visibility_label(issue: pd.Series) -> str:
+    priority = _safe_text(issue.get("priority_level")).lower()
+    impact = _safe_text(issue.get("impact_level")).lower()
+    if priority == "high" or impact == "high":
+        return "즉시 대응 필요"
+    if priority == "medium" or impact == "medium":
+        return "단기 개선 필요"
+    return "모니터링 대상"
 
 
 def _render_scope_summary(context: StrategyPageContext, video_info: dict[str, Any]) -> None:
@@ -307,9 +314,11 @@ def _render_primary(primary: pd.Series, issue_comments: pd.DataFrame) -> None:
     priority = _safe_text(primary.get("priority_level")) or "Low"
     impact = _safe_text(primary.get("impact_level")) or "Low"
 
+    urgency_label = _priority_visibility_label(primary)
     st.markdown("## 🔥 주요 1순위 이슈")
     with st.container(border=True):
         st.markdown(f"### {title}")
+        st.markdown(f"**{urgency_label}**")
         st.markdown(f"👉 **지금 해야 할 것**: {action_sentence}")
         st.markdown(f"📌 **왜 중요한가**: {importance_sentence}")
         st.markdown(f"📊 **핵심 판단 근거**: {signal_sentence}")
@@ -392,8 +401,6 @@ def render_strategy_page(context: StrategyPageContext) -> None:
         return
 
     prioritized_issues, video_info = _prioritize_by_selected_video(top_issues, context.selected_video_id)
-    _render_scope_summary(context, video_info)
-
     primary, issue_comments, eligible_issues = _pick_primary_issue(prioritized_issues, context.analysis_non_trash)
     if primary is None:
         st.info("현재 범위에서 우선 이슈를 확정하기 어렵습니다. 범위를 넓혀 다시 확인해 주세요.")
@@ -404,8 +411,9 @@ def render_strategy_page(context: StrategyPageContext) -> None:
         and _safe_text(primary.get("level_type")).lower() != "video"
         and _safe_text(video_info.get("selected_video_id"))
     ):
-        st.info("선택 영상 이슈는 근거가 부족해, 현재 범위에서 근거가 더 충분한 이슈를 1순위로 표시했습니다.")
+        st.info("선택한 영상에서는 충분한 근거가 없어, 현재 필터 범위에서 가장 근거가 많은 이슈를 표시합니다.")
 
     _render_primary(primary, issue_comments)
+    _render_scope_summary(context, video_info)
     _render_secondary(eligible_issues, _safe_text(primary.get("issue_key", "")))
     _render_evidence(primary, issue_comments, context.representative_comments)
