@@ -7187,8 +7187,11 @@ def main() -> None:
 
 
     from src import dashboard_strategy_page as strategy_page
+    from src import dashboard_v5_page as v5_page
 
-    tab_comments, tab_videos, tab_strategy = st.tabs(["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트"])
+    tab_comments, tab_videos, tab_strategy, tab_strategy_v5 = st.tabs(
+        ["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트", "전략 인사이트 (V5 Topic-First)"]
+    )
 
     with tab_comments:
         st.caption("먼저 핵심 요약을 확인한 뒤, 아래 차트와 대표 코멘트에서 어떤 이슈가 실제로 반복되는지 내려가며 읽을 수 있습니다.")
@@ -7404,6 +7407,18 @@ def main() -> None:
             selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
         )
         strategy_page.render_strategy_page(strategy_context)
+
+    with tab_strategy_v5:
+        v5_context = v5_page.build_v5_context(
+            selected_filters=selected_filters,
+            active_mode=active_mode,
+            active_snapshot_run=active_snapshot_run,
+            filtered_comments=filtered_comments,
+            filtered_videos=filtered_videos,
+            analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
+            selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
+        )
+        v5_page.render_v5_page(v5_context)
 
 
 if __name__ == "__main__":

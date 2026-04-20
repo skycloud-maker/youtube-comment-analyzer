@@ -28,32 +28,116 @@ TOPIC_REQUIRED_COLUMNS = [
     "comment_count",
 ]
 
-TOKEN_SPLIT_RE = re.compile(r"[^\w\uac00-\ud7a3]+")
-STOPWORDS = {
-    "그리고",
-    "하지만",
-    "그런데",
+TOKEN_SPLIT_RE = re.compile(r"[^A-Za-z0-9\uac00-\ud7a3]+")
+GENERIC_STOPWORDS = {
+    "the",
+    "and",
+    "but",
+    "for",
+    "with",
+    "that",
+    "this",
+    "have",
+    "has",
+    "had",
+    "just",
+    "very",
+    "really",
+    "video",
+    "dishwasher",
+    "washers",
+    "washer",
+    "machine",
+    "using",
+    "used",
+    "user",
+    "users",
+    "good",
+    "great",
+    "nice",
+    "thanks",
+    "thank",
+    "it",
+    "to",
+    "my",
+    "you",
+    "your",
+    "our",
+    "we",
+    "they",
+    "is",
+    "are",
+    "was",
+    "were",
+    "what",
+    "why",
+    "how",
+    "who",
+    "when",
+    "where",
+    "please",
+    "help",
+    "제품",
+    "사용",
+    "영상",
     "정말",
     "너무",
-    "진짜",
     "그냥",
-    "제품",
-    "모델",
-    "사용",
-    "구매",
+    "완전",
+    "진짜",
+    "그리고",
+    "하지만",
+    "그래서",
 }
+TOKEN_NORMALIZATION = {
+    "repairs": "repair",
+    "repairing": "repair",
+    "service": "service",
+    "servicing": "service",
+    "cleaning": "clean",
+    "cleaned": "clean",
+    "filters": "filter",
+    "detergents": "detergent",
+    "pods": "pod",
+    "costs": "cost",
+    "prices": "price",
+    "expensive": "price",
+    "cheaper": "price",
+    "delivery": "delivery",
+    "install": "installation",
+    "installed": "installation",
+}
+
+
+def _normalize_token(token: str) -> str:
+    lowered = token.lower().strip()
+    if not lowered:
+        return ""
+    lowered = TOKEN_NORMALIZATION.get(lowered, lowered)
+    if len(lowered) < 2:
+        return ""
+    if lowered in GENERIC_STOPWORDS:
+        return ""
+    return lowered
 
 
 def _simple_signature(texts: pd.Series, journey_stage: str, judgment_axis: str) -> str:
     counter: Counter[str] = Counter()
     for text in texts.fillna("").astype(str):
-        for token in TOKEN_SPLIT_RE.split(text.lower()):
-            token = token.strip()
-            if len(token) < 2 or token in STOPWORDS:
+        for raw_token in TOKEN_SPLIT_RE.split(text):
+            token = _normalize_token(raw_token)
+            if not token:
                 continue
             counter[token] += 1
-    top_tokens = [token for token, _ in counter.most_common(2)]
-    token_part = "_".join(top_tokens) if top_tokens else "general"
+
+    # Prefer repeated tokens to avoid micro-topic signatures from one-off words.
+    min_repeat = 3 if len(texts) >= 20 else 2
+    repeated_tokens = [token for token, count in counter.items() if count >= min_repeat]
+    ordered_tokens = sorted(repeated_tokens, key=lambda token: (-counter[token], token))
+    if not ordered_tokens:
+        ordered_tokens = [token for token, _ in counter.most_common(2)]
+
+    token_part = "_".join(ordered_tokens[:2]) if ordered_tokens else "general"
     return f"{safe_text(journey_stage)}_{safe_text(judgment_axis)}_{token_part}"
 
 

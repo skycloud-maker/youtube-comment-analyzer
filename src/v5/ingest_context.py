@@ -7,7 +7,14 @@ from typing import Any
 
 import pandas as pd
 
-from .common import CONTRACT_VERSION, bool_series, ensure_required_columns, parse_list, safe_text
+from .common import (
+    CONTRACT_VERSION,
+    bool_series,
+    ensure_required_columns,
+    normalize_judgment_axes,
+    parse_list,
+    safe_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +115,16 @@ def build_v5_comment_context(
             "sentiment_seed": base.get("sentiment_final", base.get("sentiment_label", pd.Series("", index=base.index))).fillna("").astype(str),
             "mixed_flag": bool_series(base, "mixed_flag", False),
             "journey_stage_seed": base.get("journey_stage", pd.Series("", index=base.index)).fillna("").astype(str),
-            "judgment_axes_seed": base.get("judgment_axes", pd.Series([[] for _ in range(len(base))], index=base.index)).map(parse_list),
+            "judgment_axes_seed": base.get(
+                "judgment_axes",
+                pd.Series([[] for _ in range(len(base))], index=base.index),
+            ).map(
+                lambda value: normalize_judgment_axes(
+                    parse_list(value),
+                    logger=logger,
+                    source_label="ingest_context",
+                )
+            ),
             "product_raw": base.get("product", pd.Series("", index=base.index)).fillna("").astype(str),
             "brand_raw": base.get("brand", base.get("brand_mentioned", pd.Series("", index=base.index))).fillna("").astype(str),
             "region": base.get("region", pd.Series("", index=base.index)).fillna("").astype(str),
