@@ -7242,10 +7242,11 @@ def main() -> None:
 
 
     from src import dashboard_strategy_page as strategy_page
+    from src import dashboard_text_mining_page as tm_page
     from src import dashboard_v5_page as v5_page
 
-    tab_comments, tab_videos, tab_strategy, tab_strategy_v5 = st.tabs(
-        ["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트", "전략 인사이트 (V5 Topic-First)"]
+    tab_comments, tab_videos, tab_strategy, tab_text_mining, tab_strategy_v5 = st.tabs(
+        ["댓글 VoC 대시보드", "영상 분석 요약", "전략 인사이트", "전략 인사이트 (Text Mining 패턴)", "전략 인사이트 (V5 Topic-First 실험)"]
     )
 
     with tab_comments:
@@ -7462,6 +7463,17 @@ def main() -> None:
             selected_video_id=_safe_text(st.session_state.get(SESSION_SELECTED_VIDEO_ID_KEY, "")),
         )
         strategy_page.render_strategy_page(strategy_context)
+
+    with tab_text_mining:
+        tm_context = tm_page.build_text_mining_context(
+            selected_filters=selected_filters,
+            active_mode=active_mode,
+            active_snapshot_run=active_snapshot_run,
+            filtered_comments=filtered_comments,
+            filtered_videos=filtered_videos,
+            analysis_non_trash=bundle.get("analysis_non_trash", pd.DataFrame()),
+        )
+        tm_page.render_text_mining_page(tm_context)
 
     with tab_strategy_v5:
         v5_context = v5_page.build_v5_context(
