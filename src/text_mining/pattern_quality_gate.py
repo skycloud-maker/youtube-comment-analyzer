@@ -133,6 +133,105 @@ def _remove_with_reason(
     )
 
 
+def _adaptive_min_coverage(total_comments: int, requested: float) -> float:
+    if total_comments >= 30000:
+        floor = 0.35
+    elif total_comments >= 10000:
+        floor = 0.30
+    elif total_comments >= 5000:
+        floor = 0.25
+    elif total_comments >= 2000:
+        floor = 0.20
+    elif total_comments >= 1000:
+        floor = 0.15
+    elif total_comments >= 300:
+        floor = 0.10
+    else:
+        floor = 0.05
+    return min(float(requested), floor)
+
+
+def _has_meaningful_keywords(keyword_set: list[str]) -> bool:
+    normalized = {_safe_text(token).lower() for token in keyword_set if _safe_text(token)}
+    non_abstract = normalized.difference(_ABSTRACT_TOKENS)
+    return len(non_abstract) >= 2
+
+
+def _build_relaxed_survivors(
+    patterns_df: pd.DataFrame,
+    *,
+    comment_lookup: dict[str, set[str]],
+    min_coverage: float,
+    min_rep_keyword_overlap: int,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for row in patterns_df.itertuples(index=False):
+        pattern_label = _safe_text(getattr(row, "pattern_label", ""))
+        coverage = float(getattr(row, "coverage", 0.0) or 0.0)
+        keyword_set = _normalize_keyword_set(getattr(row, "keyword_set", []))
+        rep_ids = _normalize_comment_ids(getattr(row, "representative_comment_ids", []))
+        if coverage < float(min_coverage):
+            continue
+        if any(token in _ABSTRACT_TOKENS for token in keyword_set) and not _has_meaningful_keywords(keyword_set):
+            continue
+
+        keyword_lookup = set(keyword_set)
+        valid_rep_ids: list[str] = []
+        for cid in rep_ids:
+            comment_keywords = comment_lookup.get(cid, set())
+            overlap = len(keyword_lookup.intersection(comment_keywords))
+            if overlap >= int(min_rep_keyword_overlap):
+                valid_rep_ids.append(cid)
+        if not valid_rep_ids:
+            continue
+        rows.append(
+            {
+                "pattern_label": pattern_label,
+                "coverage": coverage,
+                "keyword_set": keyword_set,
+                "representative_comment_ids": valid_rep_ids,
+            }
+        )
+    return pd.DataFrame(rows, columns=_PATTERN_COLUMNS)
+
+
+def _append_unique_patterns(base: pd.DataFrame, extra: pd.DataFrame, *, max_top_n: int) -> pd.DataFrame:
+    if base is None or base.empty:
+        if extra is None or extra.empty:
+            return pd.DataFrame(columns=_PATTERN_COLUMNS)
+        return extra.head(max(int(max_top_n), 1)).reset_index(drop=True)
+    if extra is None or extra.empty:
+        return base.head(max(int(max_top_n), 1)).reset_index(drop=True)
+
+    out = base.copy().reset_index(drop=True)
+    existing_labels = set(out["pattern_label"].astype(str).tolist())
+    for row in extra.itertuples(index=False):
+        if len(out) >= max(int(max_top_n), 1):
+            break
+        pattern_label = _safe_text(row.pattern_label)
+        if pattern_label in existing_labels:
+            continue
+        out = pd.concat(
+            [
+                out,
+                pd.DataFrame(
+                    [
+                        {
+                            "pattern_label": pattern_label,
+                            "coverage": float(row.coverage),
+                            "keyword_set": list(row.keyword_set),
+                            "representative_comment_ids": list(row.representative_comment_ids),
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+        existing_labels.add(pattern_label)
+    out = out.sort_values(["coverage", "pattern_label"], ascending=[False, True]).reset_index(drop=True)
+    return out.head(max(int(max_top_n), 1))
+
+
 def _select_diverse_top_patterns(
     dedup_df: pd.DataFrame,
     *,
@@ -234,6 +333,7 @@ def filter_pattern_quality(
     - stricter semantic deduplication
     - flexible top-N (no forced 5)
     """
+    total_comments = int(base_df["comment_id"].astype(str).nunique()) if base_df is not None and not base_df.empty and "comment_id" in base_df.columns else int(len(base_df) if base_df is not None else 0)
     if base_df is None or base_df.empty:
         empty_patterns = pd.DataFrame(columns=_PATTERN_COLUMNS)
         empty_removed = pd.DataFrame(columns=_REMOVED_COLUMNS)
@@ -251,6 +351,13 @@ def filter_pattern_quality(
             min_pair_count=min_pair_count,
         )
     if patterns_df is None or patterns_df.empty:
+        relaxed_pair_count = max(1, min(int(min_pair_count), 3))
+        patterns_df = build_top_patterns(
+            base_df,
+            top_n=max(max_top_n, candidate_top_n, 8),
+            min_pair_count=relaxed_pair_count,
+        )
+    if patterns_df is None or patterns_df.empty:
         empty_patterns = pd.DataFrame(columns=_PATTERN_COLUMNS)
         empty_removed = pd.DataFrame(columns=_REMOVED_COLUMNS)
         return {
@@ -261,6 +368,10 @@ def filter_pattern_quality(
         }
 
     comment_lookup = _comment_keyword_lookup(base_df)
+    effective_min_coverage = _adaptive_min_coverage(total_comments, float(min_coverage))
+    effective_min_rep_overlap = int(min_rep_keyword_overlap)
+    if total_comments <= 2500:
+        effective_min_rep_overlap = min(effective_min_rep_overlap, 1)
     removed: list[dict[str, Any]] = []
     survivors: list[dict[str, Any]] = []
 
@@ -271,9 +382,9 @@ def filter_pattern_quality(
         rep_ids = _normalize_comment_ids(getattr(row, "representative_comment_ids", []))
 
         remove_reasons: list[str] = []
-        if coverage < float(min_coverage):
-            remove_reasons.append(f"coverage_below_threshold(<{min_coverage}%)")
-        if any(token in _ABSTRACT_TOKENS for token in keyword_set):
+        if coverage < float(effective_min_coverage):
+            remove_reasons.append(f"coverage_below_threshold(<{effective_min_coverage}%)")
+        if any(token in _ABSTRACT_TOKENS for token in keyword_set) and not _has_meaningful_keywords(keyword_set):
             remove_reasons.append("contains_abstract_token(issue/problem)")
 
         valid_rep_ids: list[str] = []
@@ -281,11 +392,11 @@ def filter_pattern_quality(
         for cid in rep_ids:
             comment_keywords = comment_lookup.get(cid, set())
             overlap = len(keyword_lookup.intersection(comment_keywords))
-            if overlap >= int(min_rep_keyword_overlap):
+            if overlap >= int(effective_min_rep_overlap):
                 valid_rep_ids.append(cid)
 
         if not valid_rep_ids:
-            remove_reasons.append(f"representative_alignment_fail(overlap<{min_rep_keyword_overlap})")
+            remove_reasons.append(f"representative_alignment_fail(overlap<{effective_min_rep_overlap})")
 
         if remove_reasons:
             _remove_with_reason(
@@ -307,17 +418,27 @@ def filter_pattern_quality(
             }
         )
 
-    if not survivors:
-        empty_patterns = pd.DataFrame(columns=_PATTERN_COLUMNS)
-        removed_df = pd.DataFrame(removed, columns=_REMOVED_COLUMNS)
-        return {
-            "input_patterns": patterns_df[_PATTERN_COLUMNS].copy(),
-            "filtered_patterns": empty_patterns,
-            "removed_patterns": removed_df,
-            "final_top_patterns": empty_patterns,
-        }
+    relaxed_pool = _build_relaxed_survivors(
+        patterns_df,
+        comment_lookup=comment_lookup,
+        min_coverage=max(0.05, effective_min_coverage * 0.5),
+        min_rep_keyword_overlap=1,
+    )
 
-    survivors_df = pd.DataFrame(survivors, columns=_PATTERN_COLUMNS)
+    if not survivors:
+        if relaxed_pool.empty:
+            empty_patterns = pd.DataFrame(columns=_PATTERN_COLUMNS)
+            removed_df = pd.DataFrame(removed, columns=_REMOVED_COLUMNS)
+            return {
+                "input_patterns": patterns_df[_PATTERN_COLUMNS].copy(),
+                "filtered_patterns": empty_patterns,
+                "removed_patterns": removed_df,
+                "final_top_patterns": empty_patterns,
+            }
+        survivors_df = relaxed_pool.copy()
+    else:
+        survivors_df = pd.DataFrame(survivors, columns=_PATTERN_COLUMNS)
+
     survivors_df = survivors_df.sort_values(["coverage", "pattern_label"], ascending=[False, True]).reset_index(drop=True)
 
     deduped: list[dict[str, Any]] = []
@@ -359,6 +480,36 @@ def filter_pattern_quality(
         max_top_n=max_top_n,
         removed=removed,
     ).reset_index(drop=True)
+
+    min_required = 2 if total_comments > 300 else 1
+    if len(final_df) < min_required:
+        relaxed_diverse = _select_diverse_top_patterns(
+            relaxed_pool.sort_values(["coverage", "pattern_label"], ascending=[False, True]).reset_index(drop=True),
+            max_top_n=max_top_n,
+            removed=[],
+            similarity_threshold=0.50,
+        ).reset_index(drop=True)
+        final_df = _append_unique_patterns(final_df, relaxed_diverse, max_top_n=max_top_n)
+
+    if len(final_df) < min_required:
+        provisional_patterns = build_top_patterns(
+            base_df,
+            top_n=max(max_top_n, 6),
+            min_pair_count=max(1, min(int(min_pair_count), 2)),
+        )
+        provisional_relaxed = _build_relaxed_survivors(
+            provisional_patterns,
+            comment_lookup=comment_lookup,
+            min_coverage=max(0.05, effective_min_coverage * 0.4),
+            min_rep_keyword_overlap=1,
+        )
+        provisional_final = _select_diverse_top_patterns(
+            provisional_relaxed.sort_values(["coverage", "pattern_label"], ascending=[False, True]).reset_index(drop=True),
+            max_top_n=max_top_n,
+            removed=[],
+            similarity_threshold=0.55,
+        ).reset_index(drop=True)
+        final_df = _append_unique_patterns(final_df, provisional_final, max_top_n=max_top_n)
 
     removed_df = pd.DataFrame(removed, columns=_REMOVED_COLUMNS)
     return {

@@ -20,7 +20,7 @@ _OUTPUT_COLUMNS: list[str] = [
 
 # hub tokens are allowed in patterns but cannot connect unrelated clusters.
 _HUB_TOKENS: set[str] = {"dishwasher", "water", "dish", "wash", "clean"}
-_ABSTRACT_TOKENS: set[str] = {"price", "cost", "expensive", "issue", "problem"}
+_ABSTRACT_TOKENS: set[str] = {"issue", "problem"}
 
 
 @dataclass
@@ -359,6 +359,73 @@ def _build_candidates(
     return selected
 
 
+def _pair_comment_matches(
+    comment_keywords: dict[str, set[str]],
+    keyword_1: str,
+    keyword_2: str,
+) -> list[tuple[str, int]]:
+    matched: list[tuple[str, int]] = []
+    for comment_id, tokens in comment_keywords.items():
+        if keyword_1 in tokens and keyword_2 in tokens:
+            matched.append((comment_id, len(tokens)))
+    matched.sort(key=lambda item: (-item[1], item[0]))
+    return matched
+
+
+def _build_provisional_candidates(
+    *,
+    pair_df: pd.DataFrame,
+    comment_keywords: dict[str, set[str]],
+    total_comments: int,
+    top_n: int,
+) -> list[_PatternCandidate]:
+    if pair_df.empty:
+        return []
+    ranked = pair_df.sort_values(["rank_score", "pair_count"], ascending=[False, False]).reset_index(drop=True)
+    min_coverage = 0.05 if total_comments <= 5000 else 0.08
+    max_coverage = 45.0
+    provisional: list[_PatternCandidate] = []
+
+    for row in ranked.itertuples(index=False):
+        if len(provisional) >= max(top_n * 2, 4):
+            break
+        k1 = _safe_text(getattr(row, "keyword_1", "")).lower()
+        k2 = _safe_text(getattr(row, "keyword_2", "")).lower()
+        pair_count = int(getattr(row, "pair_count", 0) or 0)
+        strength = float(getattr(row, "rank_score", 0.0) or 0.0)
+        if not k1 or not k2 or k1 == k2:
+            continue
+        if pair_count <= 0:
+            continue
+
+        matched = _pair_comment_matches(comment_keywords, k1, k2)
+        if not matched:
+            continue
+        coverage = (len(matched) / max(total_comments, 1)) * 100
+        if coverage < min_coverage or coverage > max_coverage:
+            continue
+
+        candidate = _PatternCandidate(
+            seed_pair=(k1, k2),
+            keyword_set=[k1, k2],
+            matched_comment_ids=[comment_id for comment_id, _ in matched],
+            coverage=round(coverage, 3),
+            strength=round(strength, 6),
+        )
+        if _is_overlapping_pattern(
+            provisional,
+            candidate,
+            keyword_overlap_limit=0.65,
+            comment_overlap_limit=0.72,
+        ):
+            continue
+        provisional.append(candidate)
+
+    if len(provisional) > top_n:
+        provisional = sorted(provisional, key=lambda c: (-c.coverage, -c.strength))[:top_n]
+    return provisional
+
+
 def build_top_patterns(
     base_df: pd.DataFrame,
     *,
@@ -385,6 +452,13 @@ def build_top_patterns(
 
     pair_df = build_keyword_cooccurrence(base_df, min_pair_count=min_pair_count)
     if pair_df.empty:
+        for relaxed_min_pair_count in (3, 2, 1):
+            if relaxed_min_pair_count >= int(min_pair_count):
+                continue
+            pair_df = build_keyword_cooccurrence(base_df, min_pair_count=relaxed_min_pair_count)
+            if not pair_df.empty:
+                break
+    if pair_df.empty:
         return _empty_output()
 
     comment_keywords = _build_comment_keywords(comment_keyword_map)
@@ -399,6 +473,13 @@ def build_top_patterns(
         min_pair_count=min_pair_count,
         total_comments=total_comments,
     )
+    if not selected and total_comments > 0:
+        selected = _build_provisional_candidates(
+            pair_df=pair_df,
+            comment_keywords=comment_keywords,
+            total_comments=total_comments,
+            top_n=max(int(top_n), 1),
+        )
     if not selected:
         return _empty_output()
 
