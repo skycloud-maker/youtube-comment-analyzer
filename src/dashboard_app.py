@@ -1015,7 +1015,7 @@ def _initialize_data_session_state() -> None:
     except Exception:
         requested_mode = ""
         requested_snapshot = ""
-    default_mode = "real" if _real_ready_run_dirs() else "sample"
+    default_mode = "real" if (_real_ready_run_dirs() or CLOUD_CACHE_FILE.exists()) else "sample"
     if os.getenv("PYTEST_CURRENT_TEST"):
         default_mode = "sample"
     if requested_mode in {"sample", "lite"}:
