@@ -5603,15 +5603,20 @@ def _render_representative_nlp_panel(
         summary = "핵심 의견: 댓글 원문에서 제품 사용 경험에 대한 평가가 확인됩니다."
 
     # --- 댓글 맥락: 영상 배경 + context_tags ---
-    video_title = _safe_text(working_selected.get("title", "") or working_selected.get("video_title", ""))
+    _vt_raw = working_selected.get("title") or working_selected.get("video_title") or ""
+    video_title = _safe_text(_vt_raw if not hasattr(_vt_raw, "tolist") else "")
     raw_context_tags = working_selected.get("nlp_context_tags", [])
     if isinstance(raw_context_tags, str):
         try:
-            import ast
-            raw_context_tags = ast.literal_eval(raw_context_tags)
+            import ast as _ast
+            raw_context_tags = _ast.literal_eval(raw_context_tags)
         except Exception:
             raw_context_tags = [t.strip() for t in raw_context_tags.strip("[]").split(",") if t.strip()]
-    context_tag_texts = [_safe_text(t) for t in (raw_context_tags or []) if _safe_text(t)][:3]
+    elif hasattr(raw_context_tags, "tolist"):
+        raw_context_tags = raw_context_tags.tolist()
+    if not isinstance(raw_context_tags, list):
+        raw_context_tags = []
+    context_tag_texts = [_safe_text(t) for t in raw_context_tags if _safe_text(t)][:3]
     context_tag_str = " · ".join(context_tag_texts) if context_tag_texts else aspect_label_display
     if video_title:
         comment_context_text = f"영상 '{video_title[:40]}{'…' if len(video_title) > 40 else ''}' 에서 작성된 댓글입니다. 연관 맥락: {context_tag_str}"
