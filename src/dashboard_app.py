@@ -5602,14 +5602,27 @@ def _render_representative_nlp_panel(
     if not summary:
         summary = "핵심 의견: 댓글 원문에서 제품 사용 경험에 대한 평가가 확인됩니다."
 
-    context_insight = _build_video_context_insight(
-        working_selected=working_selected,
-        sentiment_name=sentiment_value,
-        aspect_label=aspect_label,
-        keywords=core_points or keywords,
-        source_comments=source_comments,
-        negative_context=negative_context,
-    )
+    # --- 댓글 맥락: 영상 배경 + context_tags ---
+    video_title = _safe_text(working_selected.get("title", "") or working_selected.get("video_title", ""))
+    raw_context_tags = working_selected.get("nlp_context_tags", [])
+    if isinstance(raw_context_tags, str):
+        try:
+            import ast
+            raw_context_tags = ast.literal_eval(raw_context_tags)
+        except Exception:
+            raw_context_tags = [t.strip() for t in raw_context_tags.strip("[]").split(",") if t.strip()]
+    context_tag_texts = [_safe_text(t) for t in (raw_context_tags or []) if _safe_text(t)][:3]
+    context_tag_str = " · ".join(context_tag_texts) if context_tag_texts else aspect_label_display
+    if video_title:
+        comment_context_text = f"영상 '{video_title[:40]}{'…' if len(video_title) > 40 else ''}' 에서 작성된 댓글입니다. 연관 맥락: {context_tag_str}"
+    else:
+        comment_context_text = f"연관 맥락: {context_tag_str}"
+
+    # --- 사용자 니즈 / 만족 포인트: nlp_summary 기반 ---
+    user_needs_label = "만족 포인트" if sentiment_value == "positive" else "사용자 니즈"
+    user_needs_text = summary  # nlp_summary (이미 정제됨)
+
+    # --- 대응 방향 / 발전 방향: action_point 핵심만 ---
     action_payload = _build_resolution_point(
         working_selected=working_selected,
         sentiment_name=sentiment_value,
@@ -5620,9 +5633,16 @@ def _render_representative_nlp_panel(
         source_comments=source_comments,
     )
     if isinstance(action_payload, dict):
-        action_point = _safe_text(action_payload.get("action_text", ""))
+        action_point_full = _safe_text(action_payload.get("action_text", ""))
     else:
-        action_point = _safe_text(action_payload)
+        action_point_full = _safe_text(action_payload)
+    # 증거 체인 제거: 핵심 권고문만 남김
+    action_point = re.sub(r"\s*\([^)]*(?:유사 댓글|반복 신호|대표 근거|유사 근거|영상 맥락)[^)]*\)\s*$", "", action_point_full).strip()
+    if not action_point:
+        action_point = action_point_full
+    response_direction_label = "발전 방향" if sentiment_value == "positive" else "대응 방향"
+
+    # --- 보조 신호 (간소화) ---
     insight_layer = _build_insight_layer(
         working_selected=working_selected,
         sentiment_name=sentiment_value,
@@ -5632,14 +5652,13 @@ def _render_representative_nlp_panel(
         similar_comments=similar_comments,
         insight_registry=insight_registry,
     )
-    insight_text = _safe_text(insight_layer.get("insight", ""))
     supporting_signal_items = insight_layer.get("supporting_signals", [])
     if not isinstance(supporting_signal_items, list):
         supporting_signal_items = []
-    supporting_signal_items = [_safe_text(item) for item in supporting_signal_items if _safe_text(item)][:4]
+    supporting_signal_items = [_safe_text(item) for item in supporting_signal_items if _safe_text(item)][:3]
     supporting_signals_html = "".join(
         f"<li>{html.escape(item)}</li>" for item in supporting_signal_items
-    ) or "<li>근거 신호를 충분히 확보하지 못해 추가 검토가 필요합니다.</li>"
+    ) or "<li>추가 근거 신호를 확보하지 못했습니다.</li>"
 
     fill_color = {"negative": "#ef4444", "positive": "#3b82f6", "neutral": "#8b5cf6", "trash": "#64748b"}.get(sentiment_value, "#3b82f6")
     keywords_html = "".join(f'<span class="rep-ai-kw">{html.escape(keyword)}</span>' for keyword in keywords)
@@ -5691,9 +5710,15 @@ def _render_representative_nlp_panel(
             <div class="rep-ai-label">키워드</div>
             <div class="rep-ai-kws">{keywords_html}</div>
           </div>
-          <div class="rep-ai-insight"><strong>영상 맥락 인사이트</strong><br>{html.escape(context_insight)}</div>
-          <div class="rep-ai-action"><strong>{"강화 포인트" if sentiment_value == "positive" else "해결 포인트"}</strong><br>{html.escape(action_point)}</div>
-          <div class="rep-ai-insight"><strong>인사이트 레이어</strong><br>{html.escape(insight_text)}</div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">댓글 맥락</div>
+            <div class="rep-ai-box">{html.escape(comment_context_text)}</div>
+          </div>
+          <div class="rep-ai-sec">
+            <div class="rep-ai-label">{html.escape(user_needs_label)}</div>
+            <div class="rep-ai-box">{html.escape(user_needs_text)}</div>
+          </div>
+          <div class="rep-ai-action"><strong>{html.escape(response_direction_label)}</strong><br>{html.escape(action_point)}</div>
           <div class="rep-ai-sec">
             <div class="rep-ai-label">보조 신호</div>
             <div class="rep-ai-box">
