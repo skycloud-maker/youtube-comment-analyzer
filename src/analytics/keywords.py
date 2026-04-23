@@ -80,6 +80,18 @@ UI_NOISE_TERMS = {
     # User-reported noisy tokens
     "샀는데", "샀다", "샀어요", "있는데", "없이", "없어서", "있는데요", "없는데",
     "커서", "밤에", "낮에", "낮에도", "밤에도", "새벽에",
+    # Temporal expressions (not product insight)
+    "만에", "년만에", "개월만에", "달만에", "주만에", "일만에",
+    "1년만에", "2년만에", "3년만에", "4년만에", "5년만에",
+    "6개월만에", "1개월만에", "몇달만에", "몇년만에",
+    "년째", "개월째", "달째", "주째",
+    # Generic verbs/state expressions without product meaning
+    "생각하면", "생각해보면", "생각했는데", "생각이",
+    "느껴지는", "느껴져요", "느껴짐",
+    "이렇게", "저렇게", "그렇게해서",
+    "하실", "하시는", "하셨는데",
+    # Product category repeated as noise (low-weight handled separately)
+    "가전", "가전제품",
 }
 
 # Brand/product terms that shouldn't be separate keywords (already in brand filter)
@@ -154,6 +166,14 @@ KEYWORD_CANONICAL_ALIASES = {
     # Drum variants
     "드럼세탁기": "드럼",
     "drumwasher": "드럼",
+    # 식기세척기 typo/shorthand variants (common in Korean comments)
+    "식세기": "식기세척기",
+    "식기세기": "식기세척기",
+    "식기세척": "식기세척기",
+    "식세척기": "식기세척기",
+    # 틔운 variants
+    "lg틔운": "틔운",
+    "엘지틔운": "틔운",
     # Common normalized forms
     "a/s": "as",
 }
@@ -169,6 +189,7 @@ BUSINESS_KEEPWORDS = {
 
 PRODUCT_KEYWORDS = {
     "통돌이", "드럼", "세탁기", "건조기", "냉장고", "식기세척기", "로봇청소기", "청소기",
+    "틔운", "스타일러", "에어컨", "공기청정기", "정수기",
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]+|[0-9A-Za-z가-힣+/]+")

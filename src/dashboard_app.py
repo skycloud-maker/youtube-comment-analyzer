@@ -1222,7 +1222,8 @@ def build_keyword_summary(
         "사람들", "이유", "이게", "그게", "저게", "못쓰겠고",
     }
     low_decision_weight_keywords = {
-        "드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기", "가전", "가전제품", "제품",
+        "드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기", "틔운", "스타일러", "에어컨", "공기청정기",
+        "가전", "가전제품", "제품",
         "사람들", "이유", "지금", "요즘", "이번", "그냥", "진짜", "밤", "밤에", "커서", "때문", "이게", "그게", "못쓰겠고",
     }
     counter = build_keyword_counter(texts)
@@ -5231,13 +5232,22 @@ def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
     else:
         action_core = f"{stage_phrase}에서 신호가 혼재해 즉시 단정은 어렵습니다. '{focus_text}' 관련 증거를 추가 확보한 뒤 {action_domain} 실행안을 확정하세요."
 
-    lead_options = [
-        "실행 우선순위: ",
-        f"{stage_phrase} 개선 제안: ",
-        f"{action_domain} 실행안: ",
-        f"{product_label} 대응 제안: ",
-        "즉시 점검 포인트: ",
-    ]
+    if sentiment_value == "positive":
+        lead_options = [
+            "강화 제안: ",
+            f"{stage_phrase} 확장 포인트: ",
+            f"{product_label} 강점 활용: ",
+            "고객 만족 레버리지: ",
+            "전략적 강점: ",
+        ]
+    else:
+        lead_options = [
+            "실행 우선순위: ",
+            f"{stage_phrase} 개선 제안: ",
+            f"{action_domain} 실행안: ",
+            f"{product_label} 대응 제안: ",
+            "즉시 점검 포인트: ",
+        ]
     lead_text = _pick_action_variant(lead_options, f"lead::{signal_name}")
     composed_action = f"{lead_text}{action_core}"
 
@@ -5682,7 +5692,7 @@ def _render_representative_nlp_panel(
             <div class="rep-ai-kws">{keywords_html}</div>
           </div>
           <div class="rep-ai-insight"><strong>영상 맥락 인사이트</strong><br>{html.escape(context_insight)}</div>
-          <div class="rep-ai-action"><strong>해결 포인트</strong><br>{html.escape(action_point)}</div>
+          <div class="rep-ai-action"><strong>{"강화 포인트" if sentiment_value == "positive" else "해결 포인트"}</strong><br>{html.escape(action_point)}</div>
           <div class="rep-ai-insight"><strong>인사이트 레이어</strong><br>{html.escape(insight_text)}</div>
           <div class="rep-ai-sec">
             <div class="rep-ai-label">보조 신호</div>
