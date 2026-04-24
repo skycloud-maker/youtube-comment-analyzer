@@ -496,13 +496,17 @@ def analyze_comment_with_context(
     nlp_topics_list = nlp_fields.get("nlp_topics", [])
     insight_type = _infer_insight_type(video_type, classification_type, sentiment, is_inquiry, nlp_topics_list, source_text)
 
-    # Derive user wants/needs from NLP fields
-    nlp_user_wants = _derive_user_wants(
-        sentiment=sentiment,
-        nlp_summary=nlp_fields.get("nlp_summary"),
-        nlp_core_points=nlp_fields.get("nlp_core_points", []),
-        nlp_context_tags=nlp_fields.get("nlp_context_tags", []),
-    )
+    # Derive user wants/needs: LLM-generated value preferred, pattern fallback
+    _llm_user_wants = str(nlp_fields.get("nlp_user_wants") or "").strip()
+    if _llm_user_wants and len(_llm_user_wants) >= 6:
+        nlp_user_wants = _llm_user_wants
+    else:
+        nlp_user_wants = _derive_user_wants(
+            sentiment=sentiment,
+            nlp_summary=nlp_fields.get("nlp_summary"),
+            nlp_core_points=nlp_fields.get("nlp_core_points", []),
+            nlp_context_tags=nlp_fields.get("nlp_context_tags", []),
+        )
     lg_relevance_score, lg_relevant_comment = _compute_lg_comment_relevance(
         product_related=product_related,
         target=target,

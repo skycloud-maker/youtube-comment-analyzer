@@ -234,4 +234,5 @@ def _nlp_result_to_dict(result: Any) -> dict[str, Any]:
         "nlp_confidence_factors": getattr(result, "confidence_factors", []),
         "nlp_confidence_breakdown": getattr(result, "confidence_breakdown", {}),
         "nlp_sentiment_intensity": getattr(result, "sentiment_intensity", 0.0),
+        "nlp_user_wants": getattr(result, "user_wants", ""),
     }
