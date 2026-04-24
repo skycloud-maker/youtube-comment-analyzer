@@ -1642,6 +1642,9 @@ def apply_theme() -> None:
         .rep-ai-kw {font-size: 12px; font-weight: 700; color: #cbd5e1; background: rgba(30,41,59,0.85); border: 1px solid rgba(148,163,184,0.35); border-radius: 999px; padding: 3px 8px;}
         .rep-ai-insight {margin-top: 10px; border-left: 3px solid #38bdf8; background: rgba(14,116,144,0.12); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #e0f2fe;}
         .rep-ai-action {margin-top: 8px; border-left: 3px solid #22c55e; background: rgba(22,101,52,0.16); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #dcfce7;}
+        .w1h-row {display: flex; gap: 8px; margin-bottom: 3px; font-size: 13px; line-height: 1.45;}
+        .w1h-k {color: #86efac; font-weight: 700; min-width: 40px; flex-shrink: 0;}
+        .w1h-v {color: #dcfce7;}
         .rep-top-card {height: 100%; background: #f8fafc; border: 1px solid #dbeafe; border-radius: 10px; padding: 10px 12px; margin-bottom: 6px;}
         .rep-top-title {font-size: 14px; font-weight: 800; color: #1e293b; margin-bottom: 4px; line-height: 1.3;}
         .rep-top-meta {font-size: 11px; color: #2563eb; margin-bottom: 6px; font-weight: 700;}
@@ -5256,6 +5259,93 @@ def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
     return f"{composed_action} ({repeated_phrase})"
 
 
+_DOMAIN_TO_TEAM: dict[str, str] = {
+    "product / quality": "제품개발팀",
+    "operations / service": "CS·서비스팀",
+    "marketing / messaging": "마케팅팀",
+    "logistics / installation": "물류·설치팀",
+    "product + marketing": "제품팀·마케팅팀",
+    "product / engineering": "제품개발팀",
+}
+_SIGNAL_TO_HOW: dict[str, str] = {
+    "odor_leakage": "밀폐 구조·배기 경로·필터 수명 재검토",
+    "consumable_burden": "소모품 교체 조건 안내·구매 동선 통합",
+    "manual_intervention": "자동 처리 실패 구간 축소·수동 개입 절차 단축",
+    "reliability_failure": "고장 유형별 재현 테스트·부품 신뢰성 개선",
+    "service_response_gap": "접수-진단-해결 SLA 분리·리드타임 단축",
+    "installation_delivery_gap": "방문 전 사전안내·설치 후 검수 항목 고정",
+    "pricing_contract_gap": "결제 전 총비용·약정 조건 통합 고지",
+    "onboarding_guide_gap": "첫 7일 온보딩 가이드 핵심 오류 장면 중심 재구성",
+    "message_expectation_gap": "광고·상세 메시지를 실사용 조건 기준으로 재정의",
+    "advocacy_signal": "추천·재구매 동선에 강점 근거 배치",
+}
+
+
+def _build_5w1h_action_html(
+    action_payload: "dict[str, Any] | str",
+    action_point: str,
+    nlp_user_wants: str,
+) -> str:
+    """Return structured 5W1H HTML rows for 대응방향, or plain escaped text as fallback."""
+    if not isinstance(action_payload, dict):
+        return html.escape(action_point)
+    if action_payload.get("insufficient_evidence", False):
+        return html.escape(action_point)
+
+    trace = action_payload.get("evidence_trace", {})
+    action_domain = _safe_text(action_payload.get("action_domain", ""))
+    signal_name = _safe_text(trace.get("signal_name", ""))
+    journey_stage = _safe_text(trace.get("journey_stage", ""))
+    similar_count = int(trace.get("similar_count", 0) or 0)
+    representative_evidence = _safe_text(trace.get("representative_evidence", ""))
+    focus_points = trace.get("focus_points", [])
+    if not isinstance(focus_points, list):
+        focus_points = []
+
+    rows: list[tuple[str, str]] = []
+
+    # 담당 (Who)
+    team = _DOMAIN_TO_TEAM.get(action_domain, "")
+    if team:
+        rows.append(("담당", team))
+
+    # 과제 (What)
+    what_text = (nlp_user_wants or "").strip()
+    if not what_text and focus_points:
+        what_text = "·".join([_safe_text(p) for p in focus_points[:2] if _safe_text(p)])
+    if what_text:
+        rows.append(("과제", what_text))
+
+    # 단계 (Where/When)
+    if journey_stage and journey_stage not in {"unknown", "general", ""}:
+        stage_val = f"{journey_stage} 단계"
+        if similar_count >= 2:
+            stage_val += f" — 동일 신호 {similar_count:,}건"
+        rows.append(("단계", stage_val))
+
+    # 근거 (Why)
+    if representative_evidence:
+        truncated = representative_evidence[:45] + ("…" if len(representative_evidence) > 45 else "")
+        evidence_val = f"\"{truncated}\""
+        if similar_count >= 2:
+            evidence_val += f" 외 {similar_count:,}건 유사 패턴"
+        rows.append(("근거", evidence_val))
+
+    # 방법 (How)
+    how_text = _SIGNAL_TO_HOW.get(signal_name, "")
+    if how_text:
+        rows.append(("방법", how_text))
+
+    if not rows:
+        return html.escape(action_point)
+
+    return "".join(
+        f'<div class="w1h-row"><span class="w1h-k">[{html.escape(k)}]</span>'
+        f'<span class="w1h-v">{html.escape(v)}</span></div>'
+        for k, v in rows
+    )
+
+
 def _build_resolution_point(
     working_selected: pd.Series | str,
     sentiment_name: str | list[str],
@@ -5656,6 +5746,11 @@ def _render_representative_nlp_panel(
     if not action_point:
         action_point = action_point_full
     response_direction_label = "발전 방향" if sentiment_value == "positive" else "대응 방향"
+    action_html = _build_5w1h_action_html(
+        action_payload=action_payload,
+        action_point=action_point,
+        nlp_user_wants=_raw_user_wants,
+    )
 
     # --- 보조 신호 (간소화) ---
     insight_layer = _build_insight_layer(
@@ -5733,7 +5828,7 @@ def _render_representative_nlp_panel(
             <div class="rep-ai-label">{html.escape(user_needs_label)}</div>
             <div class="rep-ai-box">{html.escape(user_needs_text)}</div>
           </div>
-          <div class="rep-ai-action"><strong>{html.escape(response_direction_label)}</strong><br>{html.escape(action_point)}</div>
+          <div class="rep-ai-action"><strong>{html.escape(response_direction_label)}</strong><br>{action_html}</div>
           <div class="rep-ai-sec">
             <div class="rep-ai-label">보조 신호</div>
             <div class="rep-ai-box">
