@@ -162,6 +162,7 @@ class AnalyticsPipeline:
             analysis_comments["nlp_confidence_factors"] = analysis_results.map(lambda item: item.nlp_confidence_factors)
             analysis_comments["nlp_confidence_breakdown"] = analysis_results.map(lambda item: item.nlp_confidence_breakdown)
             analysis_comments["nlp_sentiment_intensity"] = analysis_results.map(lambda item: item.nlp_sentiment_intensity)
+            analysis_comments["nlp_user_wants"] = analysis_results.map(lambda item: item.nlp_user_wants)
             representative_meta = analysis_comments.apply(self._representative_metadata, axis=1, result_type="expand")
             analysis_comments = pd.concat([analysis_comments, representative_meta], axis=1)
             analysis_comments["topic_label"] = analysis_comments["cleaned_text"].map(infer_topic)
@@ -184,6 +185,7 @@ class AnalyticsPipeline:
                 "nlp_keywords", "nlp_product_mentions", "nlp_language", "nlp_provider", "nlp_model",
                 "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys", "nlp_insight_summary",
                 "nlp_confidence_factors", "nlp_confidence_breakdown", "nlp_sentiment_intensity",
+                "nlp_user_wants",
             ]
             _available_merge_cols = [c for c in _merge_cols if c in analysis_comments.columns]
             working_comments = working_comments.merge(
@@ -207,6 +209,7 @@ class AnalyticsPipeline:
                 "nlp_provider", "nlp_model",
                 "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys", "nlp_insight_summary",
                 "nlp_confidence_factors", "nlp_confidence_breakdown", "nlp_sentiment_intensity",
+                "nlp_user_wants",
             ]
             for column in _empty_cols:
                 working_comments[column] = pd.NA

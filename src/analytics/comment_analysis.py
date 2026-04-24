@@ -146,6 +146,64 @@ class CommentAnalysisResult:
     nlp_confidence_factors: list[str] = field(default_factory=list)
     nlp_confidence_breakdown: dict[str, float] = field(default_factory=dict)
     nlp_sentiment_intensity: float | None = None
+    nlp_user_wants: str = ""
+
+
+# ── nlp_user_wants derivation ─────────────────────────────────────────────────
+
+_COMPLAINT_TO_WANT: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"냄새|악취"), "냄새 없는 사용 환경"),
+    (re.compile(r"귀찮|번거|불편|힘들"), "관리 부담 최소화"),
+    (re.compile(r"안 됩|안됨|안됩니다|고장|불량|오작동"), "안정적 작동"),
+    (re.compile(r"기름|안 닦|세척이 안"), "완전한 세척 성능"),
+    (re.compile(r"소음|시끄"), "저소음 작동"),
+    (re.compile(r"느림|오래 걸|시간이 많"), "빠른 처리 속도"),
+    (re.compile(r"남은 시간|확인이 안|볼 수 없"), "동작 상태 확인 기능"),
+    (re.compile(r"비싸|가격|비용"), "합리적 가격"),
+    (re.compile(r"서비스|AS|a/s|수리|교환"), "신속한 A/S 대응"),
+    (re.compile(r"설계|버튼|ui|인터페이스"), "직관적 조작 설계"),
+    (re.compile(r"누수|물이 새"), "누수 없는 밀폐 성능"),
+]
+
+_SATISFACTION_TO_WANT: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"편리|편하|쉽"), "편리한 사용성"),
+    (re.compile(r"깨끗|잘 닦|세척"), "뛰어난 세척 성능"),
+    (re.compile(r"소독|살균"), "위생·소독 기능"),
+    (re.compile(r"조용|소음 없"), "저소음 작동"),
+    (re.compile(r"빠름|빨리|금방"), "빠른 처리 속도"),
+    (re.compile(r"추천|만족|최고|좋아"), "전반적 만족"),
+    (re.compile(r"오래|내구"), "높은 내구성"),
+]
+
+
+def _derive_user_wants(
+    sentiment: str,
+    nlp_summary: str | None,
+    nlp_core_points: list[str],
+    nlp_context_tags: list[str],
+) -> str:
+    """Derive a concise user wants/needs statement from NLP analysis fields."""
+    summary = (nlp_summary or "").strip().lower()
+    points = [p for p in (nlp_core_points or []) if p and len(str(p)) > 1]
+    subject = "·".join(str(p) for p in points[:2]) if points else ""
+
+    if sentiment == "negative":
+        for pattern, want_label in _COMPLAINT_TO_WANT:
+            if pattern.search(summary):
+                return f"{subject} 관련 {want_label}" if subject else want_label
+        if subject:
+            return f"{subject} 관련 문제 없는 사용 환경"
+        return ""
+
+    if sentiment == "positive":
+        for pattern, sat_label in _SATISFACTION_TO_WANT:
+            if pattern.search(summary):
+                return f"{subject} 기능의 {sat_label} 확인" if subject else sat_label
+        if subject:
+            return f"{subject}에 대한 긍정적 사용 경험"
+        return ""
+
+    return ""
 
 
 def _contains_any(text: str, markers: list[str]) -> bool:
@@ -426,12 +484,25 @@ def analyze_comment_with_context(
                 if not target:
                     target = _detect_target_from_nlp(nlp_products)
 
+    # Boost signal_strength when NLP intensity is high regardless of engagement
+    nlp_intensity = float(nlp_fields.get("nlp_sentiment_intensity") or 0.0)
+    if signal_strength != "strong" and nlp_intensity >= 0.7:
+        signal_strength = "strong"
+
     # Compute insight_type from video context + analysis result
     inquiry_from_nlp = _coerce_bool(nlp_fields.get("nlp_is_inquiry"), default=None)
     is_inquiry = inquiry_from_nlp if inquiry_from_nlp is not None else _infer_inquiry_flag(source_text, parent_text)
     is_rhetorical = _coerce_bool(nlp_fields.get("nlp_is_rhetorical"), default=False)
     nlp_topics_list = nlp_fields.get("nlp_topics", [])
     insight_type = _infer_insight_type(video_type, classification_type, sentiment, is_inquiry, nlp_topics_list, source_text)
+
+    # Derive user wants/needs from NLP fields
+    nlp_user_wants = _derive_user_wants(
+        sentiment=sentiment,
+        nlp_summary=nlp_fields.get("nlp_summary"),
+        nlp_core_points=nlp_fields.get("nlp_core_points", []),
+        nlp_context_tags=nlp_fields.get("nlp_context_tags", []),
+    )
     lg_relevance_score, lg_relevant_comment = _compute_lg_comment_relevance(
         product_related=product_related,
         target=target,
@@ -475,6 +546,7 @@ def analyze_comment_with_context(
         nlp_confidence_factors=nlp_fields.get("nlp_confidence_factors", []),
         nlp_confidence_breakdown=nlp_fields.get("nlp_confidence_breakdown", {}),
         nlp_sentiment_intensity=nlp_fields.get("nlp_sentiment_intensity"),
+        nlp_user_wants=nlp_user_wants,
     )
 
 
@@ -537,9 +609,18 @@ def _infer_insight_type(
         if video_type == "promotional":
             return "구매전환_증거"
 
+    _POSITIVE_TYPES = {"만족_포인트", "구매전환_증거", "브랜드_신뢰"}
+    _NEGATIVE_TYPES = {"품질_불만", "사용성_불만", "서비스_불만", "가격_민감", "경쟁사_비교"}
+
     mapped = INSIGHT_TYPE_MAP.get((video_type, classification_type))
     if mapped:
-        return mapped
+        # Skip map result when NLP sentiment clearly contradicts the mapped type
+        if sentiment == "negative" and mapped in _POSITIVE_TYPES:
+            pass
+        elif sentiment == "positive" and mapped in _NEGATIVE_TYPES:
+            pass
+        else:
+            return mapped
 
     # Fallback based on sentiment + content
     topics_blob = " ".join(nlp_topics or []).lower()

@@ -5623,9 +5623,19 @@ def _render_representative_nlp_panel(
     else:
         comment_context_text = f"연관 맥락: {context_tag_str}"
 
-    # --- 사용자 니즈 / 만족 포인트: nlp_summary 기반 ---
+    # --- 사용자 니즈 / 만족 포인트: nlp_user_wants 우선, 없으면 summary 에서 추출 ---
     user_needs_label = "만족 포인트" if sentiment_value == "positive" else "사용자 니즈"
-    user_needs_text = summary  # nlp_summary (이미 정제됨)
+    _raw_user_wants = _safe_text(working_selected.get("nlp_user_wants", ""))
+    if _raw_user_wants and len(_raw_user_wants) >= 6 and not _looks_garbled(_raw_user_wants):
+        user_needs_text = _raw_user_wants
+    else:
+        # summary 와 동일 내용 방지: 요약에서 핵심 포인트만 추출
+        _core = [_safe_text(p) for p in (core_points or []) if _safe_text(p) and len(_safe_text(p)) > 1]
+        if _core:
+            _subject = "·".join(_core[:2])
+            user_needs_text = f"{_subject} 관련 구체적 니즈 데이터 없음" if not summary else summary
+        else:
+            user_needs_text = summary
 
     # --- 대응 방향 / 발전 방향: action_point 핵심만 ---
     action_payload = _build_resolution_point(
