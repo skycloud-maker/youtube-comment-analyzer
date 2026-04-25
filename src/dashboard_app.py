@@ -1992,7 +1992,9 @@ def _clean_point_tokens(tokens: list[str], limit: int = 5) -> list[str]:
 
 
 def _extract_row_nlp_metadata(row: pd.Series) -> tuple[list[str], list[str], list[str], list[str], dict[str, float], str]:
-    core_points = _clean_point_tokens(_parse_list_like(row.get("nlp_core_points", [])), limit=6)
+    # core_points are sentence-level claims from nlp_analyzer — preserve raw, skip keyword filter
+    raw_core = _parse_list_like(row.get("nlp_core_points", []))
+    core_points = [_safe_text(p) for p in raw_core if _safe_text(p) and len(_safe_text(p)) >= 2][:6]
     context_tags = _parse_list_like(row.get("nlp_context_tags", []))[:6]
     similarity_keys = _parse_list_like(row.get("nlp_similarity_keys", []))[:10]
     confidence_factors = _parse_list_like(row.get("nlp_confidence_factors", []))[:8]
@@ -2223,7 +2225,7 @@ def _build_similarity_basis_labels(working_selected: pd.Series, sentiment_name: 
             if point:
                 labels_from_metadata.append(f"{point} 포인트")
     if not labels_from_metadata and core_points:
-        labels_from_metadata.extend([f"{point} 포인트" for point in core_points[:2]])
+        labels_from_metadata.extend([point if len(point) > 6 else f"{point} 포인트" for point in core_points[:2]])
     if labels_from_metadata:
         if sentiment_name == "negative":
             labels_from_metadata.insert(0, "불만 핵심 포인트 유사")
@@ -3959,10 +3961,7 @@ def _extract_card_keywords(working_selected: pd.Series, sentiment_name: str, lim
             return ""
         return token
 
-    core_points, _, _, _, _, _ = _extract_row_nlp_metadata(working_selected)
-    if core_points:
-        return core_points[:limit]
-
+    # core_points are now sentence-level claims — skip for keyword pills, use nlp_keywords instead
     raw_keywords = working_selected.get("nlp_keywords", [])
     if isinstance(raw_keywords, str):
         try:
