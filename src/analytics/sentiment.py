@@ -143,6 +143,13 @@ def score_sentiment(text: str) -> tuple[str, float]:
     else:
         final_score = round(((positive - negative) / (positive + negative)) if (positive + negative) else english_score, 3)
 
+    # English-only text uses VADER-calibrated thresholds; Korean uses tighter lexicon-tuned thresholds
+    if not KOREAN_HINT.search(lowered) and ENGLISH_HINT.search(lowered):
+        if final_score >= 0.15:
+            return "positive", final_score
+        if final_score <= -0.15:
+            return "negative", final_score
+        return "neutral", final_score
     if final_score >= 0.32:
         return "positive", final_score
     if final_score <= -0.22:

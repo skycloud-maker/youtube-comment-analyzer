@@ -103,56 +103,71 @@ BRAND_NOISE_TERMS = {
 STOPWORDS = KOREAN_STOPWORDS | ENGLISH_STOPWORDS | GENERIC_EXCLUDE | UI_NOISE_TERMS | BRAND_NOISE_TERMS
 
 KEYWORD_TRANSLATIONS = {
-    "noise": "소음",
-    "noisy": "소음",
-    "loud": "소음",
-    "quiet": "정숙성",
-    "vibration": "진동",
-    "vibrates": "진동",
-    "delivery": "배송",
-    "shipping": "배송",
-    "install": "설치",
-    "installation": "설치",
-    "setup": "설치",
-    "price": "가격",
-    "pricing": "가격",
-    "expensive": "가격부담",
-    "refund": "환불",
-    "return": "반품",
-    "repair": "수리",
-    "service": "고객지원",
-    "support": "고객지원",
-    "broken": "고장",
-    "issue": "문제",
-    "issues": "문제",
-    "problem": "문제",
-    "problems": "문제",
-    "defect": "불량",
-    "defective": "불량",
-    "leak": "누수",
-    "capacity": "용량",
-    "smell": "냄새",
-    "odor": "냄새",
-    "cleaning": "세척",
-    "drying": "건조성능",
-    "washing": "세탁성능",
-    "energy": "전기세",
-    "bill": "전기세",
-    "filter": "필터",
-    "door": "도어",
-    "rack": "선반",
-    "cycle": "코스",
-    "stain": "얼룩",
-    "performance": "성능",
-    "quality": "품질",
-    "manual": "설명서",
-    "wifi": "와이파이",
-    "app": "앱연결",
-    "cold": "냉각",
-    "cooling": "냉각",
-    "ice": "얼음",
-    "drain": "배수",
-    "draining": "배수",
+    # Noise / sound
+    "noise": "소음", "noisy": "소음", "loud": "소음", "quiet": "정숙성",
+    "vibration": "진동", "vibrates": "진동", "vibrating": "진동", "rattle": "진동",
+    "silent": "정숙성",
+    # Delivery / installation
+    "delivery": "배송", "shipping": "배송", "install": "설치",
+    "installation": "설치", "setup": "설치", "unboxing": "개봉",
+    # Price / value
+    "price": "가격", "pricing": "가격", "expensive": "가격부담",
+    "cheap": "저가", "cost": "비용", "affordable": "합리적가격",
+    "overpriced": "가격부담", "worth": "가성비", "value": "가성비",
+    # Service / support
+    "refund": "환불", "return": "반품", "repair": "수리",
+    "service": "고객지원", "support": "고객지원", "warranty": "보증",
+    "technician": "서비스기사", "replacement": "교체", "exchange": "교환",
+    # Failure / defect
+    "broken": "고장", "broke": "고장", "issue": "문제", "issues": "문제",
+    "problem": "문제", "problems": "문제", "defect": "불량",
+    "defective": "불량", "fault": "고장", "malfunction": "오작동",
+    "failure": "고장", "error": "오류", "glitch": "오류",
+    # Smell / hygiene
+    "smell": "냄새", "odor": "냄새", "smells": "냄새",
+    "stink": "냄새", "stinky": "냄새", "mold": "곰팡",
+    "mildew": "곰팡", "rust": "부식", "rusting": "부식", "corrode": "부식",
+    # Cleaning / washing
+    "cleaning": "세척", "clean": "세척력", "dirty": "오염",
+    "stain": "얼룩", "stains": "얼룩", "washing": "세탁성능",
+    "rinse": "헹굼", "spin": "탈수", "drying": "건조성능", "dry": "건조",
+    "steam": "스팀", "sanitize": "살균", "hygiene": "위생", "sterilize": "살균",
+    # Leak / water
+    "leak": "누수", "leaking": "누수", "leaks": "누수", "drip": "누수",
+    # Energy / efficiency
+    "energy": "전기세", "bill": "전기세", "electricity": "전기세",
+    "power": "소비전력", "efficient": "효율", "efficiency": "효율",
+    # Performance / quality
+    "performance": "성능", "quality": "품질", "capacity": "용량",
+    # Parts / components
+    "filter": "필터", "door": "도어", "rack": "선반",
+    "cycle": "코스", "shelf": "선반", "tray": "트레이",
+    "drawer": "서랍", "hose": "호스", "seal": "밀봉",
+    "gasket": "패킹", "drum": "드럼", "basket": "바스켓",
+    "manual": "설명서", "guide": "가이드",
+    # Smart / tech
+    "wifi": "와이파이", "app": "앱연결", "sensor": "센서",
+    "display": "디스플레이", "button": "버튼", "smart": "스마트기능",
+    # Cooling / temperature
+    "cold": "냉각", "cooling": "냉각", "cool": "냉각", "ice": "얼음",
+    "heat": "가열", "heating": "가열", "temperature": "온도", "freeze": "냉동",
+    # Drainage / water
+    "drain": "배수", "draining": "배수",
+    # Size / weight
+    "size": "크기", "heavy": "무게",
+    # User experience
+    "easy": "편의성", "convenient": "편의성", "inconvenient": "불편",
+    "difficult": "사용불편", "confusing": "사용불편", "intuitive": "편의성",
+    "maintenance": "유지관리", "hassle": "불편", "annoying": "불편",
+    # Design / durability
+    "design": "디자인", "color": "색상",
+    "durable": "내구성", "durability": "내구성", "sturdy": "내구성",
+    "scratch": "스크래치", "scratches": "스크래치", "crack": "균열",
+    "flimsy": "내구성미흡",
+    # Satisfaction signals
+    "recommend": "추천", "recommended": "추천", "repurchase": "재구매",
+    "satisfied": "만족", "satisfaction": "만족", "love": "만족",
+    "disappointed": "실망", "disappointing": "실망", "regret": "실망",
 }
 
 KEYWORD_CANONICAL_ALIASES = {
@@ -185,6 +200,10 @@ BUSINESS_KEEPWORDS = {
     "얼룩", "품질", "성능", "앱연결", "와이파이", "설명서", "청소", "교체", "선반", "건조시간", "세탁시간",
     "소독", "살균", "건조", "세척력", "냉각", "온도", "얼음", "소비전력", "정숙성", "배수", "물튐",
     "설치비", "소비전력", "보증", "AS", "A/S", "앱", "연동", "물샘", "탈수", "소음문제", "용량부족",
+    # English translations that should not have Korean particles stripped
+    "곰팡이", "스크래치", "내구성미흡", "합리적가격", "스마트기능",
+    "가격부담", "오작동", "효율", "비용", "균열", "바스켓", "서랍", "호스",
+    "패킹", "트레이", "가이드", "디스플레이", "센서", "버튼", "개봉",
 }
 
 PRODUCT_KEYWORDS = {
@@ -196,6 +215,12 @@ _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'-]+|[0-9A-Za-z가-힣+/]+")
 
 # Suffix-based noise filter: tokens ending with these are UI/navigation noise
 _NOISE_SUFFIXES = ("보기", "클릭", "링크", "바로가기")
+
+# English terms worth keeping as-is even without a Korean translation
+ENGLISH_KEEPWORDS = {
+    "wi-fi", "eco", "ai", "iot", "led", "lcd", "inverter",
+    "rpm", "db", "kg", "liter", "litre",
+}
 
 # Suffix-based noise filter: common Korean verb/adjective endings that are not business keywords
 _NOISE_VERB_SUFFIXES = (
@@ -259,7 +284,7 @@ def normalize_keyword(token: str) -> str:
         return ""
     if re.search(r"[^a-z0-9\uac00-\ud7a3+/]", token):
         return ""
-    if re.fullmatch(r"[a-z]+", token):
+    if re.fullmatch(r"[a-z]+", token) and token not in ENGLISH_KEEPWORDS:
         return ""
     return token
 

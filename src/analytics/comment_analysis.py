@@ -164,6 +164,20 @@ _COMPLAINT_TO_WANT: list[tuple[re.Pattern, str]] = [
     (re.compile(r"설계|버튼|ui|인터페이스"), "직관적 조작 설계"),
     (re.compile(r"누수|물이 새"), "누수 없는 밀폐 성능"),
 ]
+_COMPLAINT_TO_WANT_EN: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"smell|odor|stink|mold|mildew", re.IGNORECASE), "냄새 없는 사용 환경"),
+    (re.compile(r"annoying|hassle|inconvenient|tedious|pain in", re.IGNORECASE), "관리 부담 최소화"),
+    (re.compile(r"broken|broke|malfunction|doesn.t work|not working|defect|fault|glitch", re.IGNORECASE), "안정적 작동"),
+    (re.compile(r"dirty|doesn.t clean|not clean|still dirty|stain", re.IGNORECASE), "완전한 세척 성능"),
+    (re.compile(r"noisy|loud|noise|vibrat|rattl", re.IGNORECASE), "저소음 작동"),
+    (re.compile(r"slow|takes (too )?long|takes forever|takes (so )?much time", re.IGNORECASE), "빠른 처리 속도"),
+    (re.compile(r"expensive|overpriced|too (much|costly)|price|cost", re.IGNORECASE), "합리적 가격"),
+    (re.compile(r"service|warranty|repair|return|refund|exchange|technician", re.IGNORECASE), "신속한 A/S 대응"),
+    (re.compile(r"confusing|difficult|hard to use|complicated|unintuitive|button", re.IGNORECASE), "직관적 조작 설계"),
+    (re.compile(r"leak|leaking|drip|water (coming|getting) out", re.IGNORECASE), "누수 없는 밀폐 성능"),
+    (re.compile(r"rust|corrode|corrosion", re.IGNORECASE), "내식성 강화"),
+    (re.compile(r"energy|electricity|power bill|running cost", re.IGNORECASE), "에너지 효율 개선"),
+]
 
 _SATISFACTION_TO_WANT: list[tuple[re.Pattern, str]] = [
     (re.compile(r"편리|편하|쉽"), "편리한 사용성"),
@@ -174,6 +188,20 @@ _SATISFACTION_TO_WANT: list[tuple[re.Pattern, str]] = [
     (re.compile(r"추천|만족|최고|좋아"), "전반적 만족"),
     (re.compile(r"오래|내구"), "높은 내구성"),
 ]
+_SATISFACTION_TO_WANT_EN: list[tuple[re.Pattern, str]] = [
+    # Strong satisfaction/advocacy signals first (highest priority)
+    (re.compile(r"recommend|satisfied|love|great|amazing|perfect|happy with|worth it", re.IGNORECASE), "전반적 만족"),
+    (re.compile(r"durable|last(s| long)|long.lasting|sturdy|solid|built (well|to last)", re.IGNORECASE), "높은 내구성"),
+    (re.compile(r"easy|convenient|simple|user.friendly|effortless", re.IGNORECASE), "편리한 사용성"),
+    (re.compile(r"clean|spotless|sparkling|thorough(ly)?", re.IGNORECASE), "뛰어난 세척 성능"),
+    (re.compile(r"sanitize|hygiene|sterile|germ.free|disinfect", re.IGNORECASE), "위생·소독 기능"),
+    (re.compile(r"quiet|silent|noise.free|whisper", re.IGNORECASE), "저소음 작동"),
+    (re.compile(r"fast|quick|speed|rapid", re.IGNORECASE), "빠른 처리 속도"),
+    (re.compile(r"energy.saving|efficient|low.energy|saves electricity|power.saving", re.IGNORECASE), "에너지 효율"),
+]
+
+_EN_HINT = re.compile(r"[A-Za-z]")
+_KO_HINT = re.compile(r"[가-힣]")
 
 
 def _derive_user_wants(
@@ -187,8 +215,11 @@ def _derive_user_wants(
     points = [p for p in (nlp_core_points or []) if p and len(str(p)) > 1]
     subject = "·".join(str(p) for p in points[:2]) if points else ""
 
+    is_english_only = bool(_EN_HINT.search(summary)) and not bool(_KO_HINT.search(summary))
+
     if sentiment == "negative":
-        for pattern, want_label in _COMPLAINT_TO_WANT:
+        patterns = _COMPLAINT_TO_WANT_EN if is_english_only else _COMPLAINT_TO_WANT
+        for pattern, want_label in patterns:
             if pattern.search(summary):
                 return f"{subject} 관련 {want_label}" if subject else want_label
         if subject:
@@ -196,7 +227,8 @@ def _derive_user_wants(
         return ""
 
     if sentiment == "positive":
-        for pattern, sat_label in _SATISFACTION_TO_WANT:
+        patterns = _SATISFACTION_TO_WANT_EN if is_english_only else _SATISFACTION_TO_WANT
+        for pattern, sat_label in patterns:
             if pattern.search(summary):
                 return f"{subject} 기능의 {sat_label} 확인" if subject else sat_label
         if subject:

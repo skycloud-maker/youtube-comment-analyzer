@@ -1957,8 +1957,13 @@ def _parse_dict_like(value: Any) -> dict[str, float]:
 
 def _clean_point_tokens(tokens: list[str], limit: int = 5) -> list[str]:
     noise = {
+        # Korean noise
         "해당", "관련", "제품", "가전", "이슈", "문제", "정도", "부분", "그냥", "진짜", "너무",
         "있다", "없다", "이게", "그게", "저게", "이번", "한번", "저번",
+        # English noise
+        "very", "really", "quite", "just", "lot", "lots", "stuff", "thing", "things",
+        "good", "bad", "nice", "great", "well", "way", "much", "many", "more", "less",
+        "also", "even", "still", "already", "now", "here", "there", "actually",
     }
     alias = {
         "통돌": "통돌이",
