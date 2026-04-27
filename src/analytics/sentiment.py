@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from src.analytics.keywords import normalize_keyword
 
 try:
     from nlp_analyzer import analyze_comment as nlp_analyze_comment, analyze_batch as nlp_analyze_batch, AnalysisResult, is_valid
@@ -205,6 +206,51 @@ def analyze_batch_with_nlp(
 
 def _nlp_result_to_dict(result: Any) -> dict[str, Any]:
     """Convert AnalysisResult to a flat dict for pipeline consumption."""
+    def _sanitize_nlp_keywords(value: Any) -> list[str]:
+        noise_terms = {
+            "영상", "리뷰", "제품", "효과", "기능", "사람", "사람들", "이유",
+            "정말", "진짜", "그냥", "라고", "보니", "좀더", "점점", "기본", "혹시",
+            "만들었네", "영상보고", "먹을수있고", "사고싶은데", "하지", "추측이긴", "파는",
+        }
+        items: list[Any]
+        if isinstance(value, list):
+            items = value
+        elif isinstance(value, tuple):
+            items = list(value)
+        elif hasattr(value, "tolist"):
+            try:
+                converted = value.tolist()
+                if isinstance(converted, list):
+                    items = converted
+                elif isinstance(converted, tuple):
+                    items = list(converted)
+                elif converted is None:
+                    items = []
+                else:
+                    items = [converted]
+            except Exception:
+                items = []
+        else:
+            items = []
+
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            token = normalize_keyword(str(item or ""))
+            if not token:
+                continue
+            if token in noise_terms:
+                continue
+            if token in {"문제", "이슈", "상태", "부분", "경험", "느낌", "후기"}:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            cleaned.append(token)
+            if len(cleaned) >= 12:
+                break
+        return cleaned
+
     confidence_to_score = {
         "positive": result.confidence,
         "negative": -result.confidence,
@@ -222,7 +268,7 @@ def _nlp_result_to_dict(result: Any) -> dict[str, Any]:
         "nlp_is_inquiry": result.is_inquiry,
         "nlp_is_rhetorical": result.is_rhetorical,
         "nlp_summary": result.summary,
-        "nlp_keywords": result.keywords,
+        "nlp_keywords": _sanitize_nlp_keywords(getattr(result, "keywords", [])),
         "nlp_product_mentions": result.product_mentions,
         "nlp_language": result.language,
         "nlp_provider": result.llm_provider,
