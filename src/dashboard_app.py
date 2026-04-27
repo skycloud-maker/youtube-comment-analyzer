@@ -4939,6 +4939,7 @@ def _infer_resolution_problem_signal(
     similar_clauses: list[str],
     context_tags: list[str],
     focus_points: list[str],
+    sentiment_value: str = "",
 ) -> str:
     corpus = " ".join(
         [
@@ -4948,8 +4949,47 @@ def _infer_resolution_problem_signal(
             " ".join(focus_points),
         ]
     ).lower()
+    sentiment_norm = _safe_text(sentiment_value).lower()
+
+    def _has_any(tokens: list[str]) -> bool:
+        return any(token in corpus for token in tokens)
+
+    odor_tokens = ["냄새", "악취", "odor", "smell"]
+    odor_clear_tokens = [
+        "냄새없",
+        "냄새 없음",
+        "냄새는 없",
+        "악취 없음",
+        "no smell",
+        "without smell",
+        "odor free",
+    ]
+    odor_negative_tokens = [
+        "냄새 나",
+        "악취",
+        "불편",
+        "민원",
+        "문제",
+        "지독",
+        "거슬",
+        "힘들",
+    ]
+
+    # Odor signal should fire only when it is truly a pain signal, not "냄새 없음" praise.
+    if _has_any(odor_tokens):
+        has_odor_clear = _has_any(odor_clear_tokens)
+        has_odor_negative = _has_any(odor_negative_tokens) or sentiment_norm in {"negative", "mixed"}
+        if has_odor_negative and not has_odor_clear:
+            return "odor_leakage"
+
+    # Positive comments should prioritize strength/recommendation signals over issue-like mappings.
+    if sentiment_norm == "positive":
+        if _has_any(["추천", "재구매", "지인", "소개", "recommend", "buy again"]):
+            return "advocacy_signal"
+        if _has_any(["세척", "소독", "깨끗", "위생", "편리", "만족", "좋", "clean", "sanitize"]):
+            return "advocacy_signal"
+
     signal_rules = [
-        (["냄새", "악취", "odor", "smell"], "odor_leakage"),
         (["필터", "소모품", "교체"], "consumable_burden"),
         (["손으로", "직접", "붙어", "떼어", "scrub", "manual"], "manual_intervention"),
         (["고장", "불량", "멈춤", "누수", "파손", "fail", "broken"], "reliability_failure"),
@@ -5096,6 +5136,7 @@ def _build_resolution_evidence_bundle(
         similar_clauses=similar_clauses,
         context_tags=context_tags,
         focus_points=focus_points,
+        sentiment_value=sentiment_value,
     )
     journey_stage, journey_inferred = _resolve_journey_stage_for_resolution(
         row=row,
