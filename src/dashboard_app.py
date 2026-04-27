@@ -5319,16 +5319,16 @@ _DOMAIN_TO_TEAM: dict[str, str] = {
     "logistics / installation": "물류·설치팀",
 }
 _SIGNAL_TO_HOW: dict[str, str] = {
-    "odor_leakage": "밀폐 구조·배기 경로·필터 수명 재검토",
-    "consumable_burden": "소모품 교체 조건 안내·구매 동선 통합",
-    "manual_intervention": "자동 처리 실패 구간 축소·수동 개입 절차 단축",
-    "reliability_failure": "고장 유형별 재현 테스트·부품 신뢰성 개선",
-    "service_response_gap": "접수-진단-해결 SLA 분리·리드타임 단축",
-    "installation_delivery_gap": "방문 전 사전안내·설치 후 검수 항목 고정",
-    "pricing_contract_gap": "결제 전 총비용·약정 조건 통합 고지",
-    "onboarding_guide_gap": "첫 7일 온보딩 가이드 핵심 오류 장면 중심 재구성",
-    "message_expectation_gap": "광고·상세 메시지를 실사용 조건 기준으로 재정의",
-    "advocacy_signal": "추천·재구매 동선에 강점 근거 배치",
+    "odor_leakage": "밀폐 구조와 배기 경로를 점검하고, 필터 교체 기준을 사용 환경에 맞게 조정",
+    "consumable_burden": "소모품 교체 시점 안내를 단순화하고 구매 동선을 한 번에 이어지도록 정리",
+    "manual_intervention": "자동 처리 실패 구간을 줄이고 수동 조작 단계는 더 짧고 명확하게 정리",
+    "reliability_failure": "고장 유형별 재현 테스트를 강화하고 주요 부품 신뢰성 개선을 우선 적용",
+    "service_response_gap": "접수-진단-해결 단계를 분리 관리해 응답 리드타임을 단계별로 단축",
+    "installation_delivery_gap": "방문 전 안내를 구체화하고 설치 직후 필수 검수 항목을 표준화",
+    "pricing_contract_gap": "결제 전에 총비용과 약정 조건이 한 번에 이해되도록 고지 문구를 통합",
+    "onboarding_guide_gap": "초기 7일 가이드를 핵심 오류 장면 중심으로 재구성해 초반 이탈을 줄임",
+    "message_expectation_gap": "광고·상세 메시지를 실사용 조건 기준으로 정렬해 기대 차이를 줄임",
+    "advocacy_signal": "추천·재구매 접점에서 강점 근거가 자연스럽게 보이도록 메시지 흐름을 강화",
 }
 
 

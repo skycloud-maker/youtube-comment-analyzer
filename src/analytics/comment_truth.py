@@ -111,7 +111,6 @@ _JOURNEY_MARKERS = {
         "compare",
         "comparison",
         "vs",
-        "recommend",
     ],
     "purchase": [
         "\uAD6C\uB9E4",
@@ -266,8 +265,6 @@ _AXIS_MARKERS = {
         "failure",
     ],
     "brand_trust": [
-        "lg",
-        "samsung",
         "\uBE0C\uB79C\uB4DC",
         "\uC2E0\uB8B0",
         "\uBBFF\uC74C",
@@ -344,6 +341,24 @@ _AXIS_MARKERS = {
         "word of mouth",
     ],
 }
+
+_BRAND_ENTITY_MARKERS = (
+    "lg",
+    "samsung",
+    "ge",
+    "whirlpool",
+    "midea",
+    "brand",
+    "\uBE0C\uB79C\uB4DC",
+)
+_BRAND_TRUST_CUES = (
+    "\uC2E0\uB8B0",
+    "\uBBFF\uC74C",
+    "\uBE0C\uB79C\uB4DC",
+    "trust",
+    "reliability",
+    "brand reputation",
+)
 
 _TOPIC_TO_AXIS = {
     "performance": "automation_convenience",
@@ -648,16 +663,16 @@ def _build_semantic_blob(row: pd.Series) -> str:
         "text_display",
         "text_original",
         "cleaned_text",
-        "title",
-        "product",
-        "classification_type",
-        "topic_label",
     ]:
         value = _coerce_text(row.get(key))
         if value:
             parts.append(value.lower())
-    for key in ["nlp_topics", "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys", "nlp_product_mentions"]:
+    for key in ["nlp_topics", "nlp_core_points", "nlp_context_tags", "nlp_similarity_keys"]:
         parts.extend([token.lower() for token in _parse_list(row.get(key)) if token])
+    for token in _parse_list(row.get("nlp_product_mentions")):
+        lowered = token.lower()
+        if lowered and lowered not in _BRAND_ENTITY_MARKERS:
+            parts.append(lowered)
     return " ".join(parts)
 
 
@@ -665,6 +680,30 @@ def _score_markers(blob: str, markers: list[str]) -> int:
     if not blob:
         return 0
     return sum(1 for marker in markers if marker and marker.lower() in blob)
+
+
+def _select_journey_stage(
+    scores: Counter[str],
+    *,
+    classification: str,
+    inquiry_flag: bool,
+) -> str:
+    max_score = max(scores.values(), default=0)
+    if max_score <= 0:
+        return ""
+
+    top_stages = [stage for stage in FIXED_JOURNEY_STAGES if scores.get(stage, 0) == max_score]
+    if not top_stages:
+        return ""
+
+    # Avoid exploration over-selection when usage/maintenance evidence is equally strong.
+    if "maintenance" in top_stages and classification == "complaint":
+        return "maintenance"
+    if "usage" in top_stages and "exploration" in top_stages and not inquiry_flag:
+        return "usage"
+    if "decision" in top_stages and "exploration" in top_stages and classification == "preference":
+        return "decision"
+    return top_stages[0]
 
 
 def _resolve_journey_stage(
@@ -706,7 +745,13 @@ def _resolve_journey_stage(
         scores["usage"] += 1
 
     if scores:
-        return max(FIXED_JOURNEY_STAGES, key=lambda stage: scores.get(stage, 0))
+        selected = _select_journey_stage(
+            scores,
+            classification=classification,
+            inquiry_flag=inquiry_flag,
+        )
+        if selected:
+            return selected
 
     if product_related:
         if classification in {"comparison", "informational"} and inquiry_flag:
@@ -745,6 +790,14 @@ def _resolve_judgment_axes(
         scores["automation_convenience"] += 1
     if sentiment == "mixed":
         scores["usage_pattern_fit"] += 1
+
+    brand_entity_hits = _score_markers(blob, list(_BRAND_ENTITY_MARKERS))
+    brand_trust_cue_hits = _score_markers(blob, list(_BRAND_TRUST_CUES))
+    if brand_entity_hits and brand_trust_cue_hits:
+        scores["brand_trust"] += min(brand_entity_hits, 2)
+    elif scores.get("brand_trust", 0) > 0 and brand_trust_cue_hits == 0:
+        # Suppress brand_trust assignments when only brand names are present.
+        scores["brand_trust"] = 0
 
     stage_value = _coerce_text(journey_stage).lower()
     if stage_value in {"purchase", "decision"}:
@@ -829,21 +882,27 @@ def build_canonical_comment_truth(comments_df: pd.DataFrame) -> pd.DataFrame:
         & fallback_text.ne("")
         & hygiene_class.ne("trash")
     )
+    strategic_scope = analysis_included & hygiene_class.eq("strategic")
 
     journey_stage = working.apply(
         lambda row: _resolve_journey_stage(
             row,
-            analysis_included=bool(analysis_included.loc[row.name]),
+            analysis_included=bool(strategic_scope.loc[row.name]),
             inquiry_flag=bool(inquiry_flag.loc[row.name]),
         ),
         axis=1,
     )
+    journey_stage = journey_stage.where(strategic_scope, pd.NA)
 
     judgment_axes = working.apply(
-        lambda row: _resolve_judgment_axes(
-            row,
-            journey_stage=journey_stage.loc[row.name],
-            inquiry_flag=bool(inquiry_flag.loc[row.name]),
+        lambda row: (
+            _resolve_judgment_axes(
+                row,
+                journey_stage=journey_stage.loc[row.name],
+                inquiry_flag=bool(inquiry_flag.loc[row.name]),
+            )
+            if bool(strategic_scope.loc[row.name])
+            else []
         ),
         axis=1,
     )
