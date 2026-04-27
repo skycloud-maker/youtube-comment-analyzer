@@ -32,7 +32,13 @@ ENGLISH_STOPWORDS = {
     "youre", "theyre", "thats", "theres", "whats", "ill", "id", "weve", "isnt", "arent", "wont", "hadnt",
 }
 
-GENERIC_EXCLUDE = {"문제", "이슈", "상태", "부분", "경험", "느낌", "후기"}
+GENERIC_EXCLUDE = {
+    "문제", "이슈", "상태", "부분", "경험", "느낌", "후기",
+    # Generic descriptors that lack actionable meaning on their own
+    "기능", "비교", "특징", "방법", "평가", "일반", "사용자", "구매",
+    "조건", "결과", "원인", "내용", "사항", "관계", "기준", "수준",
+    "차이", "실제", "효과", "만족도", "사용법", "제조사",
+}
 
 # UI/interaction noise: YouTube UI terms + common non-business comment patterns
 UI_NOISE_TERMS = {
@@ -40,7 +46,7 @@ UI_NOISE_TERMS = {
     "링크", "제품보기", "바로가기", "클릭", "상세보기", "자세히보기",
     "상단", "하단", "좌측", "우측", "중앙", "왼쪽", "오른쪽",
     "있음", "없음", "가능", "불가", "추천이유", "체감가",
-    "보기", "구독", "좋아요", "알림", "추천", "공유", "재생",
+    "보기", "구독", "좋아요", "알림", "공유", "재생",
     "채널", "동영상", "영상보기", "확인", "누르", "눌러",
     # Emoticons/reactions
     "ㅋㅋ", "ㅋㅋㅋ", "ㅎㅎ", "ㅎㅎㅎ", "ㅠㅠ", "ㅜㅜ", "ㅠㅠㅠ", "ㅜㅜㅜ",
@@ -200,6 +206,8 @@ BUSINESS_KEEPWORDS = {
     "얼룩", "품질", "성능", "앱연결", "와이파이", "설명서", "청소", "교체", "선반", "건조시간", "세탁시간",
     "소독", "살균", "건조", "세척력", "냉각", "온도", "얼음", "소비전력", "정숙성", "배수", "물튐",
     "설치비", "소비전력", "보증", "AS", "A/S", "앱", "연동", "물샘", "탈수", "소음문제", "용량부족",
+    # Satisfaction / recommendation signals (positive sentiment indicators)
+    "추천", "재구매", "만족", "실망",
     # English translations that should not have Korean particles stripped
     "곰팡이", "스크래치", "내구성미흡", "합리적가격", "스마트기능",
     "가격부담", "오작동", "효율", "비용", "균열", "바스켓", "서랍", "호스",

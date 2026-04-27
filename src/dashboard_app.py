@@ -2993,11 +2993,23 @@ def _normalize_pill_state(key: str, options: list[str], defaults: list[str]) -> 
 
 
 def build_keyword_pack(comments_df: pd.DataFrame, sentiment_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    texts = tuple(comments_df.loc[comments_df["sentiment_label"] == sentiment_code, "cleaned_text"].fillna("").astype(str).tolist())
+    mask = comments_df["sentiment_label"] == sentiment_code
+    sentiment_df = comments_df.loc[mask]
+    raw_texts = sentiment_df["cleaned_text"].fillna("").astype(str).tolist()
+
+    # Boost with LLM-extracted keywords (3× weight) to surface semantically meaningful terms
+    # over generic raw-text tokens. Only active after LLM analysis has been run.
+    if "nlp_keywords" in sentiment_df.columns:
+        for raw_kw in sentiment_df["nlp_keywords"].tolist():
+            kw_items = _parse_list_like(raw_kw)
+            if kw_items:
+                raw_texts.append(" ".join(kw_items * 3))
+
+    texts = tuple(raw_texts)
     blocked_keywords = _build_dynamic_keyword_excludes(comments_df)
     return (
-        build_keyword_summary(texts, top_n=6, version="v7", blocked_keywords=blocked_keywords),
-        build_keyword_summary(texts, top_n=30, version="v7", blocked_keywords=blocked_keywords),
+        build_keyword_summary(texts, top_n=6, version="v8", blocked_keywords=blocked_keywords),
+        build_keyword_summary(texts, top_n=30, version="v8", blocked_keywords=blocked_keywords),
     )
 
 
