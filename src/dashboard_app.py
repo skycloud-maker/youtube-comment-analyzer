@@ -5787,10 +5787,11 @@ def _render_representative_nlp_panel(
     if not action_point:
         action_point = action_point_full
     response_direction_label = "발전 방향" if sentiment_value == "positive" else "대응 방향"
+    nlp_user_wants_text = _safe_text(working_selected.get("nlp_user_wants", ""))
     action_html = _build_5w1h_action_html(
         action_payload=action_payload,
         action_point=action_point,
-        nlp_user_wants=_raw_user_wants,
+        nlp_user_wants=nlp_user_wants_text,
     )
 
     # --- 보조 신호 (간소화) ---
