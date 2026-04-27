@@ -1642,6 +1642,7 @@ def apply_theme() -> None:
         .rep-ai-kw {font-size: 12px; font-weight: 700; color: #cbd5e1; background: rgba(30,41,59,0.85); border: 1px solid rgba(148,163,184,0.35); border-radius: 999px; padding: 3px 8px;}
         .rep-ai-insight {margin-top: 10px; border-left: 3px solid #38bdf8; background: rgba(14,116,144,0.12); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #e0f2fe;}
         .rep-ai-action {margin-top: 8px; border-left: 3px solid #22c55e; background: rgba(22,101,52,0.16); border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #dcfce7;}
+        .w1h-guide {font-size: 11px; color: #86efac; opacity: 0.75; margin-bottom: 5px; letter-spacing: 0.03em;}
         .w1h-row {display: flex; gap: 8px; margin-bottom: 3px; font-size: 13px; line-height: 1.45;}
         .w1h-k {color: #86efac; font-weight: 700; min-width: 40px; flex-shrink: 0;}
         .w1h-v {color: #dcfce7;}
@@ -5343,11 +5344,13 @@ def _build_5w1h_action_html(
     if not rows:
         return html.escape(action_point)
 
-    return "".join(
+    guide = '<div class="w1h-guide">담당 · 과제 · 단계 · 근거 · 방법 — 결정 가능한 항목만 표시</div>'
+    body = "".join(
         f'<div class="w1h-row"><span class="w1h-k">[{html.escape(k)}]</span>'
         f'<span class="w1h-v">{html.escape(v)}</span></div>'
         for k, v in rows
     )
+    return guide + body
 
 
 def _build_resolution_point(
@@ -5832,7 +5835,7 @@ def _render_representative_nlp_panel(
             <div class="rep-ai-label">{html.escape(user_needs_label)}</div>
             <div class="rep-ai-box">{html.escape(user_needs_text)}</div>
           </div>
-          <div class="rep-ai-action"><strong>{html.escape(response_direction_label)}</strong><br>{action_html}</div>
+          <div class="rep-ai-action"><strong>{html.escape(response_direction_label)} (5W1H)</strong><br>{action_html}</div>
           <div class="rep-ai-sec">
             <div class="rep-ai-label">보조 신호</div>
             <div class="rep-ai-box">
