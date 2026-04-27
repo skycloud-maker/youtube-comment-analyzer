@@ -5318,7 +5318,7 @@ _DOMAIN_TO_TEAM: dict[str, str] = {
     "marketing / messaging": "마케팅팀",
     "logistics / installation": "물류·설치팀",
 }
-_SIGNAL_TO_HOW: dict[str, str] = {
+_SIGNAL_TO_HOW_NEGATIVE: dict[str, str] = {
     "odor_leakage": "밀폐 구조와 배기 경로를 점검하고, 필터 교체 기준을 사용 환경에 맞게 조정",
     "consumable_burden": "소모품 교체 시점 안내를 단순화하고 구매 동선을 한 번에 이어지도록 정리",
     "manual_intervention": "자동 처리 실패 구간을 줄이고 수동 조작 단계는 더 짧고 명확하게 정리",
@@ -5330,6 +5330,40 @@ _SIGNAL_TO_HOW: dict[str, str] = {
     "message_expectation_gap": "광고·상세 메시지를 실사용 조건 기준으로 정렬해 기대 차이를 줄임",
     "advocacy_signal": "추천·재구매 접점에서 강점 근거가 자연스럽게 보이도록 메시지 흐름을 강화",
 }
+
+_SIGNAL_TO_HOW_POSITIVE: dict[str, str] = {
+    "odor_leakage": "냄새 관리 강점이 유지되도록 밀폐·배기 성능 기준과 필터 관리 가이드를 표준화",
+    "consumable_burden": "관리 편의 강점이 이어지도록 소모품 안내·구매 동선을 지금 구조로 단순 유지",
+    "manual_intervention": "자동 처리 강점 사례를 핵심 사용 시나리오 중심으로 반복 노출해 기대를 고정",
+    "reliability_failure": "내구·안정성 강점 사례를 검증 지표와 함께 축적해 장기 신뢰 메시지로 확장",
+    "service_response_gap": "빠른 대응 경험이 유지되도록 접수-진단-해결 표준 절차를 현재 수준으로 고정",
+    "installation_delivery_gap": "설치·배송 만족 요소를 체크리스트로 고정해 동일 품질이 반복되도록 운영",
+    "pricing_contract_gap": "비용/약정 안내의 명확성을 유지해 구매 전 혼선이 생기지 않도록 표준 문구를 고정",
+    "onboarding_guide_gap": "초기 가이드 강점을 유지해 첫 7일 사용 적응이 끊기지 않도록 핵심 흐름을 보강",
+    "message_expectation_gap": "콘텐츠 메시지와 실사용 체감이 일치하도록 현재 전달 구조를 유지·확장",
+    "advocacy_signal": "추천·재구매 접점에서 강점 근거가 자연스럽게 이어지도록 후기-메시지 연결을 강화",
+}
+
+_SIGNAL_TO_HOW_MIXED: dict[str, str] = {
+    "odor_leakage": "만족 구간은 유지하고 냄새 불만 구간만 분리해 밀폐·배기·필터 기준을 이중 관리",
+    "consumable_burden": "편의 강점은 유지하되 교체 부담 구간은 별도 안내 시나리오로 분리",
+    "manual_intervention": "결과 만족과 수동 피로를 분리해 자동화 보정과 사용 절차 단축을 병행",
+    "reliability_failure": "안정 구간과 불안정 구간을 분리해 고장 재현 테스트를 우선 순위로 운영",
+    "service_response_gap": "응답 만족 사례는 유지하고 지연 사례는 유형별로 분리해 SLA를 재설정",
+    "installation_delivery_gap": "설치 만족/불만 사례를 분리해 사전안내와 현장 검수 기준을 이원화",
+    "pricing_contract_gap": "가치 만족과 비용 불만을 분리해 가격 고지와 혜택 메시지를 각각 정교화",
+    "onboarding_guide_gap": "초기 적응 성공/실패 장면을 분리해 가이드 난이도를 단계별로 조정",
+    "message_expectation_gap": "기대 충족/불일치 구간을 분리해 메시지 약속 범위를 장면별로 재정렬",
+    "advocacy_signal": "추천 의도와 망설임 신호를 분리해 후기 노출 강도와 전환 메시지를 조정",
+}
+
+
+def _resolve_5w1h_how_text(signal_name: str, sentiment_value: str, mixed_flag: bool) -> str:
+    if mixed_flag:
+        return _SIGNAL_TO_HOW_MIXED.get(signal_name, "")
+    if sentiment_value == "positive":
+        return _SIGNAL_TO_HOW_POSITIVE.get(signal_name, _SIGNAL_TO_HOW_NEGATIVE.get(signal_name, ""))
+    return _SIGNAL_TO_HOW_NEGATIVE.get(signal_name, "")
 
 
 def _build_5w1h_action_html(
@@ -5345,6 +5379,8 @@ def _build_5w1h_action_html(
     action_domain = _safe_text(action_payload.get("action_domain", ""))
     signal_name = _safe_text(trace.get("signal_name", ""))
     journey_stage = _safe_text(trace.get("journey_stage", ""))
+    sentiment_value = _safe_text(trace.get("polarity", "")).lower()
+    mixed_flag = bool(trace.get("mixed_flag", False))
     similar_count = int(trace.get("similar_count", 0) or 0)
     representative_evidence = _safe_text(trace.get("representative_evidence", ""))
     focus_points = trace.get("focus_points", [])
@@ -5368,8 +5404,6 @@ def _build_5w1h_action_html(
     # 단계 (Where/When)
     if journey_stage and journey_stage not in {"unknown", "general", ""}:
         stage_val = f"{journey_stage} 단계"
-        if similar_count >= 2:
-            stage_val += f" — 동일 신호 {similar_count:,}건"
         rows.append(("단계", stage_val))
 
     # 근거 (Why)
@@ -5381,7 +5415,7 @@ def _build_5w1h_action_html(
         rows.append(("근거", evidence_val))
 
     # 방법 (How)
-    how_text = _SIGNAL_TO_HOW.get(signal_name, "")
+    how_text = _resolve_5w1h_how_text(signal_name, sentiment_value, mixed_flag)
     if how_text:
         rows.append(("방법", how_text))
 
