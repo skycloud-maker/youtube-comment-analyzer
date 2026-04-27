@@ -1220,11 +1220,14 @@ def build_keyword_summary(
     hard_block_keywords = {
         "커서", "밤에", "지금", "요즘", "이번", "그냥", "진짜", "정말", "약간",
         "사람들", "이유", "이게", "그게", "저게", "못쓰겠고",
+        "라고", "보니", "있고요", "좀더", "점점", "기본", "혹시", "대단한",
+        "만들었네", "영상보고", "먹을수있고", "사고싶은데", "하지", "추측이긴", "파는",
     }
     low_decision_weight_keywords = {
         "드럼", "통돌이", "세탁기", "건조기", "냉장고", "식기세척기", "틔운", "스타일러", "에어컨", "공기청정기",
         "가전", "가전제품", "제품",
         "사람들", "이유", "지금", "요즘", "이번", "그냥", "진짜", "밤", "밤에", "커서", "때문", "이게", "그게", "못쓰겠고",
+        "영상", "리뷰", "기능", "효과", "라고", "보니", "있고요", "좀더", "점점", "직접", "혹시",
     }
     counter = build_keyword_counter(texts)
     rows = [{"keyword": keyword, "count": count} for keyword, count in filter_business_keywords(counter, top_n * 6)]
@@ -1253,6 +1256,8 @@ def _build_dynamic_keyword_excludes(comments_df: pd.DataFrame) -> tuple[str, ...
         "커서", "밤에", "지금", "요즘", "이번", "그냥", "진짜", "정말", "약간", "사람들", "이유",
         "있고", "있음", "없는", "없음", "없이", "없어서", "때문", "처럼", "이게", "그게", "저게",
         "왜", "왜요", "왜죠", "어떻게", "뭐지", "뭔가", "못쓰겠고",
+        "라고", "보니", "있고요", "좀더", "점점", "기본", "혹시", "대단한",
+        "만들었네", "영상보고", "먹을수있고", "사고싶은데", "하지", "추측이긴", "파는",
     }
     for col in ["channel_title", "author_display_name"]:
         if col not in comments_df.columns:
@@ -1906,6 +1911,19 @@ def _parse_list_like(value: Any) -> list[str]:
         values = value
     elif isinstance(value, tuple):
         values = list(value)
+    elif hasattr(value, "tolist"):
+        try:
+            converted = value.tolist()
+            if isinstance(converted, list):
+                values = converted
+            elif isinstance(converted, tuple):
+                values = list(converted)
+            elif converted is None:
+                return []
+            else:
+                values = [converted]
+        except Exception:
+            return []
     elif isinstance(value, str):
         raw = value.strip()
         if not raw:
@@ -2993,17 +3011,31 @@ def _normalize_pill_state(key: str, options: list[str], defaults: list[str]) -> 
 
 
 def build_keyword_pack(comments_df: pd.DataFrame, sentiment_code: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    mask = comments_df["sentiment_label"] == sentiment_code
-    sentiment_df = comments_df.loc[mask]
+    nlp_noise_terms = {
+        "영상", "리뷰", "제품", "효과", "기능", "사람들", "사람", "이유", "기본", "혹시",
+        "정말", "진짜", "그냥", "라고", "보니", "있고요", "좀더", "점점", "직접", "대단한",
+        "만들었네", "영상보고", "먹을수있고", "사고싶은데", "하지", "추측이긴", "파는",
+    }
+    sentiment_df = comments_df.loc[comments_df["sentiment_label"] == sentiment_code].copy()
     raw_texts = sentiment_df["cleaned_text"].fillna("").astype(str).tolist()
 
-    # Boost with LLM-extracted keywords (3× weight) to surface semantically meaningful terms
-    # over generic raw-text tokens. Only active after LLM analysis has been run.
-    if "nlp_keywords" in sentiment_df.columns:
-        for raw_kw in sentiment_df["nlp_keywords"].tolist():
-            kw_items = _parse_list_like(raw_kw)
-            if kw_items:
-                raw_texts.append(" ".join(kw_items * 3))
+    # Boost with LLM-extracted keywords so meaningful issue tokens surface above narration noise.
+    # Keep this light and filtered to avoid amplifying weak generic terms.
+    for _, row in sentiment_df.iterrows():
+        nlp_tokens: list[str] = []
+        for raw_kw in _parse_list_like(row.get("nlp_keywords", [])):
+            token = normalize_keyword(raw_kw)
+            if not token:
+                continue
+            if token in nlp_noise_terms:
+                continue
+            if token in {"문제", "이슈", "상태", "부분", "경험", "느낌", "후기"}:
+                continue
+            nlp_tokens.append(token)
+        if not nlp_tokens:
+            continue
+        dedup_tokens = list(dict.fromkeys(nlp_tokens))[:6]
+        raw_texts.append(" ".join(dedup_tokens * 3))
 
     texts = tuple(raw_texts)
     blocked_keywords = _build_dynamic_keyword_excludes(comments_df)
