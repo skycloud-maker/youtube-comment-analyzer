@@ -5305,12 +5305,18 @@ def _compose_resolution_action_text(bundle: dict[str, Any]) -> str:
 
 
 _DOMAIN_TO_TEAM: dict[str, str] = {
-    "product / quality": "제품개발팀",
+    # Values returned by _infer_resolution_action_domain()
+    "product": "제품개발팀",
     "operations / service": "CS·서비스팀",
+    "UX / guide": "UX·가이드팀",
+    "marketing / message": "마케팅팀",
+    "business / policy": "기획·전략팀",
+    # Legacy / alternate spellings
+    "product / quality": "제품개발팀",
+    "product / engineering": "제품개발팀",
+    "product + marketing": "제품팀·마케팅팀",
     "marketing / messaging": "마케팅팀",
     "logistics / installation": "물류·설치팀",
-    "product + marketing": "제품팀·마케팅팀",
-    "product / engineering": "제품개발팀",
 }
 _SIGNAL_TO_HOW: dict[str, str] = {
     "odor_leakage": "밀폐 구조·배기 경로·필터 수명 재검토",
@@ -5333,8 +5339,6 @@ def _build_5w1h_action_html(
 ) -> str:
     """Return structured 5W1H HTML rows for 대응방향, or plain escaped text as fallback."""
     if not isinstance(action_payload, dict):
-        return html.escape(action_point)
-    if action_payload.get("insufficient_evidence", False):
         return html.escape(action_point)
 
     trace = action_payload.get("evidence_trace", {})
