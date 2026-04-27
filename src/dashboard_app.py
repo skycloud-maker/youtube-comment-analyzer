@@ -4934,6 +4934,60 @@ def _extract_similar_comment_clauses(frame: pd.DataFrame | None, limit: int = 3)
     return clauses
 
 
+def _select_resolution_representative_clause(text_value: str, sentiment_value: str) -> str:
+    clauses = _split_comment_clauses(text_value)
+    if not clauses:
+        return ""
+
+    sentiment_norm = _safe_text(sentiment_value).lower()
+    positive_markers = [
+        "좋", "만족", "편리", "잘", "유용", "추천", "재구매",
+        "깨끗", "소독", "세척", "냄새없", "문제없", "최고",
+    ]
+    complaint_markers = [
+        "불편", "어렵", "힘들", "문제", "고장", "불량", "냄새 나", "악취",
+        "지연", "답답", "안됨", "안 돼", "못", "누수",
+    ]
+
+    scored: list[tuple[float, str]] = []
+    for clause in clauses:
+        lowered = clause.lower()
+        score = min(len(clause), 120) / 120
+        if sentiment_norm == "positive":
+            if any(marker in lowered for marker in positive_markers):
+                score += 2.2
+            if any(marker in lowered for marker in complaint_markers):
+                score -= 1.6
+            if "불편함은 없" in lowered or "문제는 없" in lowered:
+                score += 0.8
+        elif sentiment_norm == "negative":
+            if any(marker in lowered for marker in complaint_markers):
+                score += 2.2
+        if re.search(r"\d", clause):
+            score += 0.2
+        scored.append((score, clause))
+
+    ranked = sorted(scored, key=lambda item: item[0], reverse=True)
+    return ranked[0][1] if ranked else ""
+
+
+def _extract_secondary_concern_note(text_value: str, sentiment_value: str) -> str:
+    sentiment_norm = _safe_text(sentiment_value).lower()
+    if sentiment_norm != "positive":
+        return ""
+    lowered = _safe_text(text_value).lower()
+    concern_rules = [
+        (["남은시간", "잔여시간", "시간 표시"], "남은시간 표시 가시성이 낮아 사용 중 진행 상태 확인이 어려운 점은 별도 보완 과제로 관리"),
+        (["앱 연결", "연결", "wifi", "와이파이"], "앱 연결 안정성 관련 보완 요구가 있어 초기 연결 경험 개선을 병행 검토"),
+        (["소음", "시끄"], "전반 만족과 별개로 소음 체감 편차가 있어 사용 환경별 가이드 보완을 검토"),
+        (["불편", "아쉽"], "전체 만족은 높지만 일부 사용 불편 포인트가 있어 후속 개선 항목으로 분리 관리"),
+    ]
+    for tokens, note in concern_rules:
+        if any(token in lowered for token in tokens):
+            return note
+    return ""
+
+
 def _infer_resolution_problem_signal(
     representative_text: str,
     similar_clauses: list[str],
@@ -4941,14 +4995,14 @@ def _infer_resolution_problem_signal(
     focus_points: list[str],
     sentiment_value: str = "",
 ) -> str:
-    corpus = " ".join(
-        [
-            _safe_text(representative_text),
-            " ".join(similar_clauses),
-            " ".join(context_tags),
-            " ".join(focus_points),
-        ]
-    ).lower()
+    corpus_parts = [
+        _safe_text(representative_text),
+        " ".join(context_tags),
+        " ".join(focus_points),
+    ]
+    if _safe_text(sentiment_value).lower() != "positive":
+        corpus_parts.append(" ".join(similar_clauses))
+    corpus = " ".join(corpus_parts).lower()
     sentiment_norm = _safe_text(sentiment_value).lower()
 
     def _has_any(tokens: list[str]) -> bool:
@@ -4974,13 +5028,19 @@ def _infer_resolution_problem_signal(
         "거슬",
         "힘들",
     ]
-
-    # Odor signal should fire only when it is truly a pain signal, not "냄새 없음" praise.
-    if _has_any(odor_tokens):
-        has_odor_clear = _has_any(odor_clear_tokens)
-        has_odor_negative = _has_any(odor_negative_tokens) or sentiment_norm in {"negative", "mixed"}
-        if has_odor_negative and not has_odor_clear:
-            return "odor_leakage"
+    manual_burden_tokens = [
+        "손으로",
+        "직접",
+        "수동",
+        "귀찮",
+        "번거",
+        "청소",
+        "설거지",
+        "붙어",
+        "떼어",
+        "manual",
+        "scrub",
+    ]
 
     # Positive comments should prioritize strength/recommendation signals over issue-like mappings.
     if sentiment_norm == "positive":
@@ -4988,6 +5048,16 @@ def _infer_resolution_problem_signal(
             return "advocacy_signal"
         if _has_any(["세척", "소독", "깨끗", "위생", "편리", "만족", "좋", "clean", "sanitize"]):
             return "advocacy_signal"
+
+    if sentiment_norm in {"negative", "mixed"} and _has_any(manual_burden_tokens):
+        return "manual_intervention"
+
+    # Odor signal should fire only when it is truly a pain signal, not "냄새 없음" praise.
+    if _has_any(odor_tokens):
+        has_odor_clear = _has_any(odor_clear_tokens)
+        has_odor_negative = _has_any(odor_negative_tokens) or sentiment_norm in {"negative", "mixed"}
+        if has_odor_negative and not has_odor_clear:
+            return "odor_leakage"
 
     signal_rules = [
         (["필터", "소모품", "교체"], "consumable_burden"),
@@ -5115,8 +5185,11 @@ def _build_resolution_evidence_bundle(
             _safe_text(row.get("text_display", "")),
         ]
     )
-    representative_clause = _pick_salient_clauses(representative_text, limit=1)
-    representative_evidence = _summarize_original_for_preview(representative_clause[0], limit=82) if representative_clause else ""
+    representative_clause = _select_resolution_representative_clause(representative_text, sentiment_value)
+    if not representative_clause:
+        fallback_clauses = _pick_salient_clauses(representative_text, limit=1)
+        representative_clause = fallback_clauses[0] if fallback_clauses else ""
+    representative_evidence = _summarize_original_for_preview(representative_clause, limit=82) if representative_clause else ""
     similar_clauses = _extract_similar_comment_clauses(similar_comments, limit=3)
     journey_stage_direct = _journey_value_from_row(row)
     mixed_flag = bool(_truthy(row.get("mixed_flag", False)) or sentiment_value == "mixed")
@@ -5152,6 +5225,7 @@ def _build_resolution_evidence_bundle(
         mixed_flag=mixed_flag,
         signal_name=signal_name,
     )
+    secondary_concern_note = _extract_secondary_concern_note(representative_text, sentiment_value)
     insufficient_reasons: list[str] = []
     if not journey_stage or journey_stage == "기타":
         insufficient_reasons.append("journey_stage_missing")
@@ -5179,6 +5253,7 @@ def _build_resolution_evidence_bundle(
         "context_evidence": context_evidence,
         "signal_name": signal_name,
         "action_domain": action_domain,
+        "secondary_concern_note": secondary_concern_note,
         "insufficient_evidence": insufficient_evidence,
         "insufficient_reasons": insufficient_reasons,
     }
@@ -5362,7 +5437,7 @@ _DOMAIN_TO_TEAM: dict[str, str] = {
 _SIGNAL_TO_HOW_NEGATIVE: dict[str, str] = {
     "odor_leakage": "밀폐 구조와 배기 경로를 점검하고, 필터 교체 기준을 사용 환경에 맞게 조정",
     "consumable_burden": "소모품 교체 시점 안내를 단순화하고 구매 동선을 한 번에 이어지도록 정리",
-    "manual_intervention": "자동 처리 실패 구간을 줄이고 수동 조작 단계는 더 짧고 명확하게 정리",
+    "manual_intervention": "거름망·필터 세척 부담이 줄어들도록 분리/세척 동선을 단순화하고 수동 개입 단계를 최소화",
     "reliability_failure": "고장 유형별 재현 테스트를 강화하고 주요 부품 신뢰성 개선을 우선 적용",
     "service_response_gap": "접수-진단-해결 단계를 분리 관리해 응답 리드타임을 단계별로 단축",
     "installation_delivery_gap": "방문 전 안내를 구체화하고 설치 직후 필수 검수 항목을 표준화",
@@ -5399,10 +5474,16 @@ _SIGNAL_TO_HOW_MIXED: dict[str, str] = {
 }
 
 
-def _resolve_5w1h_how_text(signal_name: str, sentiment_value: str, mixed_flag: bool) -> str:
+def _resolve_5w1h_how_text(signal_name: str, sentiment_value: str, mixed_flag: bool, focus_points: list[str] | None = None) -> str:
+    focus_points = focus_points if isinstance(focus_points, list) else []
+    focus_hint = "·".join([_safe_text(item) for item in focus_points[:2] if _safe_text(item)])
     if mixed_flag:
         return _SIGNAL_TO_HOW_MIXED.get(signal_name, "")
     if sentiment_value == "positive":
+        if signal_name == "advocacy_signal":
+            if focus_hint:
+                return f"{focus_hint} 강점을 고객 의사결정 장면에서 반복 노출해 추천·재구매 전환 포인트로 확장"
+            return "확인된 강점이 구매/추천 접점에서 반복 노출되도록 메시지·후기 흐름을 표준화"
         return _SIGNAL_TO_HOW_POSITIVE.get(signal_name, _SIGNAL_TO_HOW_NEGATIVE.get(signal_name, ""))
     return _SIGNAL_TO_HOW_NEGATIVE.get(signal_name, "")
 
@@ -5424,6 +5505,7 @@ def _build_5w1h_action_html(
     mixed_flag = bool(trace.get("mixed_flag", False))
     similar_count = int(trace.get("similar_count", 0) or 0)
     representative_evidence = _safe_text(trace.get("representative_evidence", ""))
+    secondary_concern_note = _safe_text(trace.get("secondary_concern_note", ""))
     focus_points = trace.get("focus_points", [])
     if not isinstance(focus_points, list):
         focus_points = []
@@ -5456,8 +5538,10 @@ def _build_5w1h_action_html(
         rows.append(("근거", evidence_val))
 
     # 방법 (How)
-    how_text = _resolve_5w1h_how_text(signal_name, sentiment_value, mixed_flag)
+    how_text = _resolve_5w1h_how_text(signal_name, sentiment_value, mixed_flag, focus_points=focus_points)
     if how_text:
+        if secondary_concern_note and sentiment_value == "positive":
+            how_text = f"{how_text} (보완: {secondary_concern_note})"
         rows.append(("방법", how_text))
 
     if not rows:
@@ -5521,6 +5605,7 @@ def _build_resolution_point(
             "context_evidence": bundle.get("context_evidence", ""),
             "focus_points": bundle.get("focus_points", []),
             "context_tags": bundle.get("context_tags", []),
+            "secondary_concern_note": bundle.get("secondary_concern_note", ""),
             "insufficient_reasons": bundle.get("insufficient_reasons", []),
         },
         "insufficient_evidence": bool(bundle.get("insufficient_evidence", False)),
